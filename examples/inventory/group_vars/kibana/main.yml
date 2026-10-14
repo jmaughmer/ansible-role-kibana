@@ -1,0 +1,46 @@
+---
+kibana_version: "9.5.4"
+
+# ------------------------------------------------------------------ package source
+# Default: Elastic's public repository. To install from Red Hat Satellite / Katello:
+# kibana_repo_source: satellite
+# kibana_satellite_repo_id: ACME_Elastic_Elastic_9_x    # subscription-manager repos --list
+# kibana_satellite_repo_state: disabled                 # keep `dnf update` from upgrading Kibana
+
+kibana_group: kibana
+
+# ------------------------------------------------------------------ server
+# Users reach Kibana through the virtual address keepalived moves between
+# kb-1/kb-2, so this name must also be a SAN in each instance's certificate.
+# keepalived moves the address, not the port, so the URL keeps Kibana's port:
+# Kibana builds absolute links (alerts, reports, shared links) from it. Drop
+# the port only when something in front really listens on 443.
+kibana_server_public_base_url: "https://kibana.example.com:{{ kibana_server_port }}"
+kibana_server_ssl_enabled: true
+# CA that issued the Kibana server and Elasticsearch HTTP certificates
+kibana_ssl_ca_certificate: |
+  -----BEGIN CERTIFICATE-----
+  REPLACE-WITH-ISSUING-CA-CERTIFICATE
+  -----END CERTIFICATE-----
+
+# ------------------------------------------------------------------ Elasticsearch
+kibana_elasticsearch_group: elasticsearch
+kibana_elasticsearch_auth: service_account_token
+kibana_elasticsearch_service_account_token: "{{ vault_kibana_service_account_token }}"
+
+# ------------------------------------------------------------------ security
+# Identical on every instance (defined once here, values in vault.yml)
+kibana_security_encryption_key: "{{ vault_kibana_security_encryption_key }}"
+kibana_encrypted_saved_objects_encryption_key: "{{ vault_kibana_encrypted_saved_objects_encryption_key }}"
+kibana_reporting_encryption_key: "{{ vault_kibana_reporting_encryption_key }}"
+
+kibana_session_idle_timeout: 1h
+kibana_session_lifespan: 7d
+
+# ------------------------------------------------------------------ operations
+kibana_restart_batch_size: 1
+kibana_log_level: info
+
+kibana_settings_extra:
+  xpack.task_manager.capacity: 20
+  server.securityResponseHeaders.strictTransportSecurity: "max-age=31536000"

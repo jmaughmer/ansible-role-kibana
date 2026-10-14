@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# Environment for the kibana service (systemd EnvironmentFile syntax).
+KBN_PATH_CONF="{{ kibana_conf_dir }}"
+{% for name, value in kibana_environment | dictsort %}
+{{ name }}="{{ value | string | replace('\\', '\\\\') | replace('"', '\\"') }}"
+{% endfor %}

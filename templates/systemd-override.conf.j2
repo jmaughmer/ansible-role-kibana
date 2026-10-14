@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+[Service]
+{% if kibana_systemd_limit_nofile | string | length > 0 %}
+LimitNOFILE={{ kibana_systemd_limit_nofile }}
+{% endif %}

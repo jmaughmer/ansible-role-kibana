@@ -1,0 +1,89 @@
+---
+- name: Certificates | Create TLS directory
+  ansible.builtin.file:
+    path: "{{ kibana_ssl_dir }}"
+    state: directory
+    owner: root
+    group: kibana
+    mode: "0750"
+
+# Entries carry either inline content or the path of a file already on the host,
+# such as a certificate issued by ansible-role-elastic-tls.
+- name: Certificates | Install Elasticsearch CA certificate
+  ansible.builtin.copy:
+    content: "{{ _kb_es_ca_content if (_kb_es_ca_content | length) > 0 else omit }}"
+    src: "{{ _kb_es_ca_path if (_kb_es_ca_path | length) > 0 else omit }}"
+    remote_src: "{{ (_kb_es_ca_path | length) > 0 }}"
+    dest: "{{ _kb_es_ca_file }}"
+    owner: root
+    group: kibana
+    mode: "0644"
+  register: _kb_tls_es_ca
+
+- name: Certificates | Install server certificate, key and CA
+  when: kibana_server_ssl_enabled | bool
+  block:
+    - name: Certificates | Install server certificate
+      ansible.builtin.copy:
+        content: "{{ _kb_ssl_entry.certificate.content | default(omit) }}"
+        src: "{{ omit if _kb_ssl_entry.certificate.content is defined else _kb_ssl_entry.certificate.path }}"
+        remote_src: "{{ _kb_ssl_entry.certificate.content is not defined }}"
+        dest: "{{ _kb_server_cert_file }}"
+        owner: root
+        group: kibana
+        mode: "0644"
+      register: _kb_tls_cert
+
+    - name: Certificates | Install server private key
+      ansible.builtin.copy:
+        content: "{{ _kb_ssl_entry.key.content | default(omit) }}"
+        src: "{{ omit if _kb_ssl_entry.key.content is defined else _kb_ssl_entry.key.path }}"
+        remote_src: "{{ _kb_ssl_entry.key.content is not defined }}"
+        dest: "{{ _kb_server_key_file }}"
+        owner: root
+        group: kibana
+        mode: "0640"
+      register: _kb_tls_key
+      no_log: "{{ kibana_no_log }}"
+      diff: false
+
+    - name: Certificates | Install server CA certificate
+      ansible.builtin.copy:
+        content: "{{ _kb_server_ca_content if (_kb_server_ca_content | length) > 0 else omit }}"
+        src: "{{ _kb_server_ca_path if (_kb_server_ca_path | length) > 0 else omit }}"
+        remote_src: "{{ (_kb_server_ca_path | length) > 0 }}"
+        dest: "{{ _kb_server_ca_file }}"
+        owner: root
+        group: kibana
+        mode: "0644"
+      register: _kb_tls_ca
+      when: (_kb_server_ca_content | length) > 0 or (_kb_server_ca_path | length) > 0
+
+    - name: Certificates | Verify private key matches certificate
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          cert_pub=$(openssl x509 -in "$KB_CERT" -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum)
+          key_pub=$(openssl pkey -in "$KB_KEY" -passin env:KB_KEY_PASSPHRASE -pubout -outform DER | sha256sum)
+          [ "$cert_pub" = "$key_pub" ]
+        executable: /bin/bash
+      environment:
+        KB_CERT: "{{ _kb_server_cert_file }}"
+        KB_KEY: "{{ _kb_server_key_file }}"
+        KB_KEY_PASSPHRASE: "{{ _kb_ssl_key_passphrase }}"
+      changed_when: false
+      check_mode: false
+      no_log: "{{ kibana_no_log }}"
+
+    - name: Certificates | Verify certificate chains to the CA
+      ansible.builtin.command:
+        argv: [openssl, verify, -CAfile, "{{ _kb_server_ca_file }}", -untrusted, "{{ _kb_server_cert_file }}", "{{ _kb_server_cert_file }}"]
+      changed_when: false
+      check_mode: false
+      when: (_kb_server_ca_content | length) > 0 or (_kb_server_ca_path | length) > 0
+
+- name: Certificates | Flag restart for certificate changes
+  ansible.builtin.set_fact:
+    _kb_restart_required: true
+  when: >-
+    _kb_tls_es_ca is changed or _kb_tls_cert is changed or _kb_tls_key is changed or _kb_tls_ca is changed

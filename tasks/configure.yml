@@ -1,0 +1,14 @@
+---
+- name: Configure | Render kibana.yml
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: "{{ kibana_conf_dir }}/kibana.yml"
+    owner: root
+    group: kibana
+    mode: "0660"
+  register: _kb_config_file
+
+- name: Configure | Flag restart for configuration changes
+  ansible.builtin.set_fact:
+    _kb_restart_required: true
+  when: _kb_config_file is changed

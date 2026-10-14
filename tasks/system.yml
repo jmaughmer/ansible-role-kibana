@@ -1,0 +1,104 @@
+---
+- name: System | Create systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/kibana.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: System | Configure systemd drop-in
+  ansible.builtin.template:
+    src: systemd-override.conf.j2
+    dest: /etc/systemd/system/kibana.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: _kb_systemd_override
+
+- name: System | Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: _kb_systemd_override is changed
+
+# Read by the packaged unit (EnvironmentFile=-/etc/sysconfig/kibana)
+- name: System | Configure service environment
+  ansible.builtin.template:
+    src: sysconfig.j2
+    dest: /etc/sysconfig/kibana
+    owner: root
+    group: root
+    mode: "0600"
+  register: _kb_sysconfig
+
+- name: System | Set Node.js heap size
+  ansible.builtin.lineinfile:
+    path: "{{ kibana_conf_dir }}/node.options"
+    # present: also replaces a commented hint; absent: only removes an active setting
+    regexp: "{{ '^ *#* *--max-old-space-size=' if (kibana_max_old_space_size_mb | string | length) > 0 else '^ *--max-old-space-size=' }}"
+    line: "--max-old-space-size={{ kibana_max_old_space_size_mb }}"
+    state: "{{ 'present' if (kibana_max_old_space_size_mb | string | length) > 0 else 'absent' }}"
+    create: true
+    owner: root
+    group: kibana
+    mode: "0660"
+  register: _kb_node_options
+
+- name: System | Flag restart for service changes
+  ansible.builtin.set_fact:
+    _kb_restart_required: true
+  when: _kb_systemd_override is changed or _kb_sysconfig is changed or _kb_node_options is changed
+
+- name: System | Check whether firewalld is running
+  ansible.builtin.command:
+    cmd: systemctl is-active firewalld
+  register: _kb_firewalld_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: kibana_manage_firewall | bool
+
+- name: System | Open Kibana port in firewalld
+  ansible.posix.firewalld:
+    port: "{{ kibana_server_port }}/tcp"
+    zone: "{{ kibana_firewall_zone }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  when:
+    - kibana_manage_firewall | bool
+    - (_kb_firewalld_state.stdout | default('') | trim) == 'active'
+
+- name: System | Open additional ports in firewalld
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    zone: "{{ kibana_firewall_zone }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ kibana_firewall_ports }}"
+  when:
+    - kibana_manage_firewall | bool
+    - (_kb_firewalld_state.stdout | default('') | trim) == 'active'
+
+- name: System | Open firewalld services
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    zone: "{{ kibana_firewall_zone }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ kibana_firewall_services }}"
+  when:
+    - kibana_manage_firewall | bool
+    - (_kb_firewalld_state.stdout | default('') | trim) == 'active'
+
+- name: System | Report that firewalld is not running
+  ansible.builtin.debug:
+    msg: >-
+      kibana_manage_firewall is on but firewalld is not running on {{ inventory_hostname }}, so no
+      rules were added. Port {{ kibana_server_port }} has to be reachable however this host filters
+      traffic.
+  when:
+    - kibana_manage_firewall | bool
+    - (_kb_firewalld_state.stdout | default('') | trim) != 'active'

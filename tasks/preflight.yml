@@ -1,0 +1,202 @@
+---
+- name: Preflight | Verify operating system is supported
+  ansible.builtin.assert:
+    that:
+      - kibana_supported_distributions is sequence
+      - kibana_supported_distributions is not string
+      - ansible_facts['os_family'] == 'RedHat'
+      - ansible_facts['distribution'] in kibana_supported_distributions
+      - ansible_facts['distribution_major_version'] in ['9', '10']
+    fail_msg: >-
+      Unsupported platform {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }}. Supported: major version 9 or 10 of
+      {{ kibana_supported_distributions | join(', ') }} (kibana_supported_distributions).
+    quiet: true
+
+- name: Preflight | Verify the play is not serialized
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts | difference(ansible_play_batch) | length == 0
+    fail_msg: >-
+      Do not use `serial` on plays that apply this role; restarts and upgrades are coordinated by
+      the role (kibana_restart_batch_size).
+    quiet: true
+  run_once: true
+
+- name: Preflight | Verify host is a member of the Kibana group
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in (groups[kibana_group] | default([]))
+    fail_msg: "{{ inventory_hostname }} is not in inventory group '{{ kibana_group }}'."
+    quiet: true
+
+- name: Preflight | Verify Kibana version
+  ansible.builtin.assert:
+    that:
+      - kibana_version is match('^9[.][0-9]+[.][0-9]+$')
+      - _kb_installed_version == '' or _kb_installed_version is version(kibana_version, '<=')
+      - _kb_installed_version == '' or _kb_installed_version.split('.')[0] == _kb_major_version
+    fail_msg: >-
+      kibana_version must be an exact 9.x.y release; downgrades and major upgrades are not supported
+      (installed: '{{ _kb_installed_version }}', requested: '{{ kibana_version }}').
+    quiet: true
+
+- name: Preflight | Verify package source settings
+  ansible.builtin.assert:
+    that:
+      - kibana_manage_repo is not defined
+      - kibana_repo_source in ['elastic', 'satellite', 'none']
+      - kibana_repo_source != 'satellite' or kibana_satellite_repo_id | length > 0
+      - kibana_satellite_repo_state in ['unmanaged', 'enabled', 'disabled']
+      - kibana_satellite_repo_overrides is mapping
+      - kibana_satellite_repo_overrides.keys() | map('lower') | intersect(['enabled', 'baseurl', 'name']) | length == 0
+    fail_msg: >-
+      kibana_repo_source must be elastic, satellite or none (kibana_manage_repo was replaced:
+      use kibana_repo_source: none instead of false). Satellite needs kibana_satellite_repo_id;
+      kibana_satellite_repo_state must be unmanaged, enabled or disabled; and
+      kibana_satellite_repo_overrides cannot set enabled (use the state setting), baseurl or name.
+    quiet: true
+
+- name: Preflight | Verify upgrades include every Kibana instance
+  ansible.builtin.assert:
+    that:
+      - groups[kibana_group] | difference(ansible_play_hosts) | length == 0
+    fail_msg: >-
+      Kibana does not support rolling upgrades: every instance must be stopped while saved objects
+      migrate. These instances are not in the play: {{ groups[kibana_group] | difference(ansible_play_hosts) }}.
+      Run without --limit, or set kibana_upgrade_allow_partial: true if they are already stopped.
+    quiet: true
+  run_once: true
+  when:
+    - _kb_deployment_upgrade | bool
+    - not (kibana_upgrade_allow_partial | bool)
+
+- name: Preflight | Verify node roles and tuning values
+  ansible.builtin.assert:
+    that:
+      - _kb_node_roles is sequence and _kb_node_roles is not string
+      - _kb_node_roles | length > 0
+      - _kb_node_roles | difference(_kb_valid_node_roles) | length == 0
+      - (kibana_max_old_space_size_mb | string) is match('^([0-9]+)?$')
+      - kibana_restart_batch_size | int >= 1
+      - kibana_auth_providers is mapping
+      - kibana_settings_extra is mapping
+      - kibana_elasticsearch_hosts | length > 0
+    fail_msg: >-
+      kibana_node_roles must be a non-empty subset of {{ _kb_valid_node_roles }} (got {{ _kb_node_roles }}),
+      kibana_max_old_space_size_mb must be a number of MB, kibana_restart_batch_size >= 1, and
+      kibana_elasticsearch_hosts must not be empty (group '{{ kibana_elasticsearch_group }}').
+    quiet: true
+
+- name: Preflight | Verify Elasticsearch credentials are configured
+  ansible.builtin.assert:
+    that:
+      - kibana_elasticsearch_auth in ['service_account_token', 'basic']
+      - >-
+        kibana_elasticsearch_auth != 'service_account_token'
+        or kibana_elasticsearch_service_account_token | length > 0
+      - >-
+        kibana_elasticsearch_auth != 'basic'
+        or (kibana_elasticsearch_password | length > 0 and kibana_elasticsearch_username != 'elastic')
+      - >-
+        not (kibana_elasticsearch_manage_password | bool)
+        or (kibana_elasticsearch_auth == 'basic' and kibana_elasticsearch_admin_password | length > 0)
+    fail_msg: >-
+      Set kibana_elasticsearch_auth to service_account_token (with kibana_elasticsearch_service_account_token)
+      or basic (with kibana_elasticsearch_password; the elastic superuser is not allowed).
+      kibana_elasticsearch_manage_password needs basic auth and kibana_elasticsearch_admin_password.
+    quiet: true
+  no_log: "{{ kibana_no_log }}"
+
+- name: Preflight | Verify encryption keys
+  ansible.builtin.assert:
+    that:
+      - kibana_security_encryption_key | length >= 32
+      - kibana_encrypted_saved_objects_encryption_key | length >= 32
+      - kibana_reporting_encryption_key | length == 0 or kibana_reporting_encryption_key | length >= 32
+    fail_msg: >-
+      kibana_security_encryption_key and kibana_encrypted_saved_objects_encryption_key are required and,
+      like kibana_reporting_encryption_key, must be at least 32 characters. Generate with `openssl rand -hex 32`
+      and store them in vault.
+    quiet: true
+  no_log: "{{ kibana_no_log }}"
+
+# Fingerprints (SHA-256) are compared instead of the keys themselves; role
+# defaults are not visible through hostvars and keys must not become facts.
+- name: Preflight | Fingerprint encryption keys
+  ansible.builtin.set_fact:
+    _kb_key_fingerprints:
+      security: "{{ kibana_security_encryption_key | string | hash('sha256') }}"
+      encrypted_saved_objects: "{{ kibana_encrypted_saved_objects_encryption_key | string | hash('sha256') }}"
+      reporting: "{{ kibana_reporting_encryption_key | string | hash('sha256') }}"
+  no_log: "{{ kibana_no_log }}"
+
+- name: Preflight | Verify encryption keys are identical on every instance
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts | map('extract', hostvars, '_kb_key_fingerprints') | unique | list | length == 1
+    fail_msg: >-
+      Encryption keys differ between Kibana instances. All instances of a deployment must share the
+      same kibana_*_encryption_key values or sessions and encrypted saved objects break.
+    quiet: true
+  run_once: true
+
+- name: Preflight | Verify firewall settings
+  ansible.builtin.assert:
+    that:
+      - kibana_firewall_ports is sequence
+      - kibana_firewall_ports is not string
+      - kibana_firewall_services is sequence
+      - kibana_firewall_services is not string
+      - kibana_firewall_ports | reject('match', '^[0-9]+(-[0-9]+)?/(tcp|udp)$') | list | length == 0
+    fail_msg: >-
+      kibana_firewall_ports entries must look like 514/udp, 5044/tcp or 5000-5010/tcp
+      (got {{ kibana_firewall_ports }}), and kibana_firewall_services must be a list of
+      firewalld service names.
+    quiet: true
+
+- name: Preflight | Verify hardening settings
+  ansible.builtin.assert:
+    that:
+      - (kibana_selinux_manage | string | lower) in ['auto', 'true', 'false', 'yes', 'no']
+      - kibana_selinux_fcontexts is mapping
+      - kibana_server_ssl_supported_protocols is sequence
+      - kibana_server_ssl_supported_protocols is not string
+      - kibana_server_ssl_cipher_suites is sequence
+      - kibana_server_ssl_cipher_suites is not string
+    fail_msg: >-
+      kibana_selinux_manage must be auto, true or false, kibana_selinux_fcontexts must be a mapping,
+      and kibana_server_ssl_supported_protocols / kibana_server_ssl_cipher_suites must be lists.
+    quiet: true
+
+# The traditional encrypted PEM format derives its key with MD5, which a host
+# running in FIPS mode cannot use.
+- name: Preflight | Verify the private key can be read in FIPS mode
+  ansible.builtin.assert:
+    that:
+      - >-
+        _kb_ssl_entry.key.content is not defined
+        or _kb_ssl_entry.key.content is not search('Proc-Type: 4,ENCRYPTED')
+    fail_msg: >-
+      The private key for '{{ kibana_ssl_certificate_name }}' is in the traditional encrypted PEM
+      format (Proc-Type: 4,ENCRYPTED), whose key derivation uses MD5, and this host runs in FIPS
+      mode. Convert it first: openssl pkcs8 -topk8 -in old.key -out new.key
+    quiet: true
+  when: ansible_facts['fips'] | default(false) | bool
+  no_log: "{{ kibana_no_log }}"
+
+- name: Preflight | Verify TLS material
+  ansible.builtin.assert:
+    that:
+      - (_kb_es_ca_content | length) > 0 or (_kb_es_ca_path | length) > 0
+      - >-
+        not (kibana_server_ssl_enabled | bool)
+        or ((_kb_ssl_entry.certificate.content is defined or _kb_ssl_entry.certificate.path is defined)
+            and (_kb_ssl_entry.key.content is defined or _kb_ssl_entry.key.path is defined))
+    fail_msg: >-
+      A CA certificate for Elasticsearch is required (kibana_elasticsearch_ca_certificate,
+      kibana_elasticsearch_ca_certificate_path or kibana_ssl_ca_certificate), and with
+      kibana_server_ssl_enabled the entry '{{ kibana_ssl_certificate_name }}' in ssl_certificates or
+      elastic_tls_ssl_certificates needs a certificate and a key, given as content or as a path on the host.
+    quiet: true
+  no_log: "{{ kibana_no_log }}"

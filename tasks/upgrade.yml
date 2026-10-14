@@ -1,0 +1,95 @@
+---
+# Kibana does not support rolling upgrades: saved object migrations require
+# that no other Kibana instance is using the .kibana indices. So every instance
+# is stopped, upgraded, one instance is started to run the migrations, and the
+# rest are started once it is ready. Kibana is unavailable during this window.
+
+- name: Upgrade | Build upgrade plan
+  ansible.builtin.set_fact:
+    _kb_upgrade_hosts: >-
+      {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_kb_version_changing')
+         | map(attribute='inventory_hostname') | list }}
+    _kb_upgrade_leader: "{{ ansible_play_hosts | first }}"
+
+- name: Upgrade | Show plan
+  ansible.builtin.debug:
+    msg: >-
+      Upgrading Kibana to {{ kibana_version }} on {{ _kb_upgrade_hosts | join(', ') }}. All
+      {{ ansible_play_hosts | length }} instances are stopped; {{ _kb_upgrade_leader }} starts first and
+      runs saved object migrations, then the others start.
+
+- name: Upgrade | Coordinated upgrade
+  block:
+    - name: Upgrade | Stop every Kibana instance
+      ansible.builtin.systemd_service:
+        name: kibana
+        state: stopped
+        no_block: true
+      delegate_to: "{{ item }}"
+      loop: "{{ ansible_play_hosts }}"
+
+    - name: Upgrade | Wait for every instance to stop
+      ansible.builtin.command:
+        cmd: systemctl is-active kibana
+      delegate_to: "{{ item }}"
+      loop: "{{ ansible_play_hosts }}"
+      register: _kb_upgrade_stopped
+      until: (_kb_upgrade_stopped.stdout | trim) in ['inactive', 'failed', 'unknown']
+      retries: "{{ kibana_stop_retries }}"
+      delay: "{{ kibana_stop_delay }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Upgrade | Upgrade Kibana package
+      ansible.builtin.dnf:
+        name: "kibana-{{ hostvars[item]._kb_target_version }}"
+        state: present
+        allow_downgrade: false
+        lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+        enablerepo: "{{ _kb_package_repos if _kb_package_repos | length > 0 else omit }}"
+      delegate_to: "{{ item }}"
+      loop: "{{ _kb_upgrade_hosts }}"
+      async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
+      poll: "{{ kibana_download_async_poll }}"
+      register: _kb_upgrade_package
+      until: _kb_upgrade_package is not failed
+      retries: "{{ kibana_task_retries }}"
+      delay: "{{ kibana_task_delay }}"
+
+    - name: Upgrade | Start the migration instance
+      ansible.builtin.systemd_service:
+        name: kibana
+        state: started
+        daemon_reload: true
+        no_block: true
+      delegate_to: "{{ _kb_upgrade_leader }}"
+
+    - name: Upgrade | Wait for saved object migrations to finish
+      ansible.builtin.include_tasks: wait_ready.yml
+      vars:
+        _kb_wait_host: "{{ _kb_upgrade_leader }}"
+        _kb_wait_retries: "{{ kibana_migration_retries }}"
+
+    - name: Upgrade | Start remaining instances
+      ansible.builtin.systemd_service:
+        name: kibana
+        state: started
+        daemon_reload: true
+        no_block: true
+      delegate_to: "{{ item }}"
+      loop: "{{ ansible_play_hosts | reject('equalto', _kb_upgrade_leader) | list }}"
+
+    - name: Upgrade | Wait for remaining instances
+      ansible.builtin.include_tasks: wait_ready.yml
+      loop: "{{ ansible_play_hosts | reject('equalto', _kb_upgrade_leader) | list }}"
+      loop_control:
+        loop_var: _kb_wait_host
+
+  rescue:
+    - name: Upgrade | Stop after failed upgrade
+      ansible.builtin.fail:
+        msg: >-
+          The Kibana upgrade failed at '{{ ansible_failed_task.name | default('unknown') }}'.
+          Do not start instances still running the old version against the same Elasticsearch
+          cluster. Check {{ kibana_log_file }} on {{ _kb_upgrade_leader }} for saved object migration
+          errors, fix the cause and re-run the playbook.

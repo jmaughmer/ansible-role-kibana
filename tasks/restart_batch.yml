@@ -1,0 +1,32 @@
+---
+- name: "Rolling restart | Batch {{ _kb_batch_index + 1 }}/{{ _kb_roll_batches | length }}: {{ _kb_batch | join(', ') }}"
+  block:
+    - name: Rolling restart | Restart Kibana
+      ansible.builtin.systemd_service:
+        name: kibana
+        state: restarted
+        no_block: true
+      delegate_to: "{{ item }}"
+      loop: "{{ _kb_batch }}"
+
+    - name: Rolling restart | Wait for restarted instances
+      ansible.builtin.include_tasks: wait_ready.yml
+      loop: "{{ _kb_batch }}"
+      loop_control:
+        loop_var: _kb_wait_host
+
+    - name: Rolling restart | Pause before next batch
+      ansible.builtin.pause:
+        seconds: "{{ kibana_restart_pause_seconds }}"
+      when:
+        - kibana_restart_pause_seconds | int > 0
+        - (_kb_batch_index + 1) < (_kb_roll_batches | length)
+
+  rescue:
+    - name: Rolling restart | Stop after failed batch
+      ansible.builtin.fail:
+        msg: >-
+          Kibana did not become ready on [{{ _kb_batch | join(', ') }}] after a restart
+          ('{{ ansible_failed_task.name | default('unknown') }}'). No further instances were restarted.
+          Check `journalctl -u kibana` and {{ kibana_log_file }} - unknown or invalid settings in
+          kibana.yml prevent Kibana from starting.

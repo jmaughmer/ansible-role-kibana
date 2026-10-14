@@ -1,0 +1,35 @@
+---
+# Runs only when a package install or upgrade is about to happen. Confirms the
+# pinned version exists in the package source before anything is changed; with
+# Satellite this catches content views that were not published or promoted.
+# For upgrades this runs well before upgrade.yml stops every instance.
+- name: Install | Query available Kibana versions
+  ansible.builtin.command:
+    argv: >-
+      {{ ['dnf', '-q', 'repoquery', '--qf', '%{version}']
+         + ((['--disablerepo=*'] + (_kb_package_repos | map('regex_replace', '^', '--enablerepo=') | list))
+            if _kb_package_repos | length > 0 else [])
+         + ['kibana'] }}
+  register: _kb_available_versions
+  until: _kb_available_versions is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  changed_when: false
+  check_mode: false
+
+- name: Install | Verify the requested Kibana version is available
+  vars:
+    _kb_versions: >-
+      {{ _kb_available_versions.stdout_lines | map('trim') | select('match', '^[0-9]') | unique | list }}
+  ansible.builtin.assert:
+    that:
+      - kibana_version in _kb_versions
+    fail_msg: >-
+      kibana {{ kibana_version }} is not available from
+      {{ {'elastic': 'repository ' ~ _kb_repo_name,
+          'satellite': 'Satellite repository ' ~ kibana_satellite_repo_id,
+          'none': 'the enabled repositories'}[kibana_repo_source] }} on {{ inventory_hostname }}
+      (available: {{ (_kb_versions | sort | join(', ')) or 'none' }}).
+      {% if kibana_repo_source == 'satellite' %}Sync the repository, then publish and promote a
+      content view version that includes it to this host's lifecycle environment.{% endif %}
+    quiet: true

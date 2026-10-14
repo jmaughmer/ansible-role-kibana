@@ -1,0 +1,38 @@
+---
+- name: Install | Check the package source provides the requested version
+  ansible.builtin.import_tasks: package_version_check.yml
+  when:
+    - kibana_package_version_check | bool
+    - _kb_installed_version != kibana_version
+
+# Only fresh installs happen here. Version changes on installed hosts are
+# handled by upgrade.yml, which stops every instance first.
+#
+# Package downloads run as async jobs so a dropped SSH session does not abort
+# them, and are retried if the download itself fails.
+- name: Install | Install Kibana package
+  ansible.builtin.dnf:
+    name: "kibana-{{ kibana_version }}"
+    state: present
+    lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+    enablerepo: "{{ _kb_package_repos if _kb_package_repos | length > 0 else omit }}"
+  async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
+  poll: "{{ kibana_download_async_poll }}"
+  register: _kb_package_install
+  until: _kb_package_install is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  when: _kb_installed_version | length == 0
+
+- name: Install | Install extra packages
+  ansible.builtin.dnf:
+    name: "{{ kibana_extra_packages }}"
+    state: present
+    lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+  async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
+  poll: "{{ kibana_download_async_poll }}"
+  register: _kb_extra_packages
+  until: _kb_extra_packages is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  when: kibana_extra_packages | length > 0

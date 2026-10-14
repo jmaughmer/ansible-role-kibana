@@ -1,0 +1,34 @@
+---
+# Waits until Kibana on _kb_wait_host serves /api/status.
+# Inputs:
+#   _kb_wait_host     host to check (the request is delegated to it)
+#   _kb_wait_retries  optional, defaults to kibana_ready_retries
+#
+# Kibana answers 503 until startup (including saved object migrations) has
+# finished. Without status credentials 200/401 means ready; with credentials the
+# overall status level must be "available".
+
+- name: "Ready | Wait for Kibana on {{ _kb_wait_host }}"
+  ansible.builtin.uri:
+    url: "{{ hostvars[_kb_wait_host]._kb_status_url_fact }}"
+    url_username: "{{ kibana_status_username if _kb_status_auth | bool else omit }}"
+    url_password: "{{ kibana_status_password if _kb_status_auth | bool else omit }}"
+    force_basic_auth: "{{ _kb_status_auth | bool }}"
+    # The CA is installed from inline content or from a path on the host (as
+    # ansible-role-elastic-tls provides it); either way it ends up in this file.
+    ca_path: >-
+      {{ _kb_server_ca_file
+         if (kibana_server_ssl_enabled | bool
+             and ((_kb_server_ca_content | length) > 0 or (_kb_server_ca_path | length) > 0))
+         else omit }}
+    validate_certs: true
+    timeout: "{{ kibana_api_timeout }}"
+    status_code: [200, 401, 503]
+  delegate_to: "{{ _kb_wait_host }}"
+  register: _kb_ready
+  until: >-
+    (_kb_ready.status | default(-1)) == 200
+    and ((_kb_ready.json.status.overall.level | default('')) == 'available' or not (_kb_status_auth | bool))
+    or ((_kb_ready.status | default(-1)) == 401 and not (_kb_status_auth | bool))
+  retries: "{{ _kb_wait_retries | default(kibana_ready_retries) }}"
+  delay: "{{ kibana_ready_delay }}"

@@ -1,0 +1,62 @@
+# {{ ansible_managed }}
+#
+# Secrets (Elasticsearch credentials, encryption keys, key passphrase) are in
+# {{ _kb_keystore_path }}. kibana_settings_extra overrides the settings below.
+{#
+  The settings are built here as one expression so numbers and booleans keep
+  their types (values templated inside a dict variable become strings).
+#}
+{% set settings = {
+  'server.name': kibana_server_name,
+  'server.host': kibana_server_host,
+  'server.port': kibana_server_port | int,
+  'server.publicBaseUrl': kibana_server_public_base_url,
+  'node.roles': _kb_node_roles | list,
+  'path.data': kibana_path_data,
+  'elasticsearch.hosts': kibana_elasticsearch_hosts | list,
+  'elasticsearch.ssl.certificateAuthorities': [_kb_es_ca_file],
+  'elasticsearch.ssl.verificationMode': kibana_elasticsearch_ssl_verification_mode,
+  'elasticsearch.requestTimeout': kibana_elasticsearch_request_timeout | int,
+  'elasticsearch.shardTimeout': kibana_elasticsearch_shard_timeout | int,
+  'elasticsearch.pingTimeout': kibana_elasticsearch_ping_timeout | int,
+  'xpack.security.session.idleTimeout': kibana_session_idle_timeout,
+  'xpack.security.session.lifespan': kibana_session_lifespan,
+  'xpack.security.secureCookies': kibana_server_public_base_url is match('https://'),
+  'telemetry.optIn': kibana_telemetry_opt_in | bool,
+  'logging.root.level': kibana_log_level,
+  'logging.root.appenders': ['default', 'file'],
+  'logging.appenders.file.type': 'rolling-file',
+  'logging.appenders.file.fileName': kibana_log_file,
+  'logging.appenders.file.policy.type': 'size-limit',
+  'logging.appenders.file.policy.size': kibana_log_rolling_size,
+  'logging.appenders.file.strategy.type': 'numeric',
+  'logging.appenders.file.strategy.max': kibana_log_rolling_files | int,
+  'logging.appenders.file.layout.type': 'json'
+} %}
+{% if kibana_server_ssl_enabled | bool %}
+{%   set settings = settings | combine({
+       'server.ssl.enabled': true,
+       'server.ssl.certificate': _kb_server_cert_file,
+       'server.ssl.key': _kb_server_key_file
+     }) %}
+{% endif %}
+{% if kibana_server_ssl_enabled | bool and kibana_server_ssl_supported_protocols | length > 0 %}
+{%   set settings = settings | combine({'server.ssl.supportedProtocols': kibana_server_ssl_supported_protocols | list}) %}
+{% endif %}
+{% if kibana_server_ssl_enabled | bool and kibana_server_ssl_cipher_suites | length > 0 %}
+{%   set settings = settings | combine({'server.ssl.cipherSuites': kibana_server_ssl_cipher_suites | list}) %}
+{% endif %}
+{% if kibana_elasticsearch_auth == 'basic' %}
+{%   set settings = settings | combine({'elasticsearch.username': kibana_elasticsearch_username}) %}
+{% endif %}
+{% if kibana_server_base_path | length > 0 %}
+{%   set settings = settings | combine({
+       'server.basePath': kibana_server_base_path,
+       'server.rewriteBasePath': kibana_server_rewrite_base_path | bool
+     }) %}
+{% endif %}
+{% if kibana_auth_providers | length > 0 %}
+{%   set settings = settings | combine({'xpack.security.authc.providers': kibana_auth_providers}) %}
+{% endif %}
+
+{{ settings | combine(kibana_settings_extra) | to_nice_yaml(indent=2, width=1000) }}

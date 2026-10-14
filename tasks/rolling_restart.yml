@@ -1,0 +1,24 @@
+---
+# Included on the first host of the play only (configuration changes, no
+# version change). Restarts at most kibana_restart_batch_size instances at once.
+
+- name: Rolling restart | Build restart plan
+  ansible.builtin.set_fact:
+    _kb_roll_batches: >-
+      {{ ansible_play_hosts | map('extract', hostvars)
+         | selectattr('_kb_needs_rolling', 'defined') | selectattr('_kb_needs_rolling')
+         | map(attribute='inventory_hostname') | list
+         | batch(kibana_restart_batch_size | int) | list }}
+
+- name: Rolling restart | Show plan
+  ansible.builtin.debug:
+    msg: "{{ _kb_roll_batches | map('join', ', ') | list }}"
+  when: _kb_roll_batches | length > 0
+
+- name: Rolling restart | Process batches
+  ansible.builtin.include_tasks: restart_batch.yml
+  loop: "{{ _kb_roll_batches }}"
+  loop_control:
+    loop_var: _kb_batch
+    index_var: _kb_batch_index
+    label: "{{ _kb_batch | join(', ') }}"

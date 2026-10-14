@@ -1,0 +1,110 @@
+---
+# Validates, from every Kibana host and with Kibana's own credentials, that
+# Elasticsearch is reachable, trusted through the configured CA, accepts the
+# credentials and is not older than Kibana. Runs before anything is written.
+
+- name: Elasticsearch | Ensure the Kibana user's password (basic auth)
+  when:
+    - kibana_elasticsearch_auth == 'basic'
+    - kibana_elasticsearch_manage_password | bool
+  run_once: true
+  block:
+    - name: Elasticsearch | Test Kibana user credentials
+      ansible.builtin.uri:
+        url: "{{ item }}/_security/_authenticate"
+        url_username: "{{ kibana_elasticsearch_username }}"
+        url_password: "{{ kibana_elasticsearch_password }}"
+        force_basic_auth: true
+        ca_path: "{{ _kb_es_ca_file }}"
+        validate_certs: true
+        timeout: "{{ kibana_api_timeout }}"
+        status_code: [200, 401]
+      loop: "{{ kibana_elasticsearch_hosts }}"
+      register: _kb_es_user_probe
+      # retry only while the host could not be reached at all
+      until: (_kb_es_user_probe.status | default(-1)) in [200, 401]
+      retries: "{{ kibana_task_retries }}"
+      delay: "{{ kibana_task_delay }}"
+      failed_when: false
+      no_log: "{{ kibana_no_log }}"
+
+    - name: Elasticsearch | Set Kibana user password with admin credentials
+      ansible.builtin.uri:
+        url: "{{ (_kb_es_user_probe.results | selectattr('status', 'equalto', 401) | first).item }}/_security/user/{{ kibana_elasticsearch_username | urlencode }}/_password"
+        method: POST
+        url_username: "{{ kibana_elasticsearch_admin_username }}"
+        url_password: "{{ kibana_elasticsearch_admin_password }}"
+        force_basic_auth: true
+        ca_path: "{{ _kb_es_ca_file }}"
+        validate_certs: true
+        timeout: "{{ kibana_api_timeout }}"
+        body_format: json
+        body:
+          password: "{{ kibana_elasticsearch_password }}"
+      register: _kb_es_password_set
+      until: _kb_es_password_set is not failed
+      retries: "{{ kibana_task_retries }}"
+      delay: "{{ kibana_task_delay }}"
+      changed_when: true
+      when:
+        - _kb_es_user_probe.results | selectattr('status', 'equalto', 200) | list | length == 0
+        - _kb_es_user_probe.results | selectattr('status', 'equalto', 401) | list | length > 0
+      no_log: "{{ kibana_no_log }}"
+
+- name: Elasticsearch | Probe every Elasticsearch host with Kibana's credentials
+  ansible.builtin.uri:
+    url: "{{ item }}/"
+    headers: "{{ _kb_es_auth_headers }}"
+    url_username: "{{ kibana_elasticsearch_username if kibana_elasticsearch_auth == 'basic' else omit }}"
+    url_password: "{{ kibana_elasticsearch_password if kibana_elasticsearch_auth == 'basic' else omit }}"
+    force_basic_auth: "{{ kibana_elasticsearch_auth == 'basic' }}"
+    ca_path: "{{ _kb_es_ca_file }}"
+    validate_certs: true
+    timeout: "{{ kibana_api_timeout }}"
+    status_code: [200]
+  loop: "{{ kibana_elasticsearch_hosts }}"
+  register: _kb_es_probe
+  # retry only while the host could not be reached at all; a rejection is final
+  until: (_kb_es_probe.status | default(-1)) in [200, 401, 403]
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  failed_when: false
+  no_log: "{{ kibana_no_log }}"
+
+- name: Elasticsearch | Summarise probe results
+  ansible.builtin.set_fact:
+    _kb_es_ok_versions: >-
+      {{ _kb_es_probe.results | selectattr('status', 'equalto', 200)
+         | map(attribute='json') | map(attribute='version') | map(attribute='number') | unique | list }}
+    _kb_es_rejected: "{{ _kb_es_probe.results | selectattr('status', 'in', [401, 403]) | map(attribute='item') | list }}"
+    _kb_es_unreachable: >-
+      {{ _kb_es_probe.results | rejectattr('status', 'in', [200, 401, 403])
+         | map(attribute='item') | zip(_kb_es_probe.results | rejectattr('status', 'in', [200, 401, 403])
+                                        | map(attribute='msg') | list) | map('join', ' - ') | list }}
+
+- name: Elasticsearch | Warn about unreachable Elasticsearch hosts
+  ansible.builtin.debug:
+    msg: "Kibana on {{ inventory_hostname }} cannot reach: {{ _kb_es_unreachable }}"
+  when: _kb_es_unreachable | length > 0
+
+- name: Elasticsearch | Verify connectivity and credentials
+  ansible.builtin.assert:
+    that:
+      - _kb_es_rejected | length == 0
+      - _kb_es_ok_versions | length > 0
+    fail_msg: >-
+      {% if _kb_es_rejected | length > 0 %}Elasticsearch rejected Kibana's {{ kibana_elasticsearch_auth }}
+      credentials (or they lack the monitor privilege) on {{ _kb_es_rejected }}.
+      {% else %}No Elasticsearch host is reachable from {{ inventory_hostname }} with the configured CA:
+      {{ _kb_es_unreachable }}.{% endif %}
+    quiet: true
+
+- name: Elasticsearch | Verify Elasticsearch is not older than Kibana
+  ansible.builtin.assert:
+    that:
+      - (item.split('.')[0:2] | join('.')) is version(kibana_version.split('.')[0:2] | join('.'), '>=')
+    fail_msg: >-
+      Elasticsearch {{ item }} is older than Kibana {{ kibana_version }}. Upgrade Elasticsearch first;
+      Kibana does not work with an older Elasticsearch minor version.
+    quiet: true
+  loop: "{{ _kb_es_ok_versions }}"

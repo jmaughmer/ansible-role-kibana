@@ -1,0 +1,14 @@
+---
+# EXAMPLE ONLY - replace the values and encrypt this file:
+#   ansible-vault encrypt inventory/group_vars/kibana/vault.yml
+#
+# Service account token for elastic/kibana, created once with an admin user:
+#   curl -u elastic --cacert ca.crt -X POST \
+#     "https://es-data-1.example.com:9200/_security/service/elastic/kibana/credential/token/kibana-prod"
+# Use the "token.value" from the response.
+vault_kibana_service_account_token: "CHANGE-ME-service-account-token"
+
+# openssl rand -hex 32   (one value per key, shared by all Kibana instances)
+vault_kibana_security_encryption_key: "CHANGE-ME-0000000000000000000000000000000000000000000000000000000000"
+vault_kibana_encrypted_saved_objects_encryption_key: "CHANGE-ME-1111111111111111111111111111111111111111111111111111111111"
+vault_kibana_reporting_encryption_key: "CHANGE-ME-2222222222222222222222222222222222222222222222222222222222"

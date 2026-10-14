@@ -1,0 +1,94 @@
+---
+# Internal variables, evaluated lazily (secrets never become facts).
+
+_kb_major_version: "{{ kibana_version.split('.')[0] }}"
+_kb_repo_name: "kibana-{{ _kb_major_version }}.x"
+# Repositories enabled for the role's own dnf tasks (none when repo_source is 'none')
+_kb_package_repos: >-
+  {{ [_kb_repo_name] if kibana_repo_source == 'elastic'
+     else ([kibana_satellite_repo_id] if kibana_repo_source == 'satellite' else []) }}
+_kb_python: "{{ ansible_facts['python']['executable'] | default('/usr/bin/python3') }}"
+_kb_keystore_path: "{{ kibana_conf_dir }}/kibana.keystore"
+_kb_keystore_state_file: "{{ kibana_conf_dir }}/.ansible-keystore-state.json"
+# The package CLIs locate the configuration directory through this variable.
+_kb_cli_env:
+  KBN_PATH_CONF: "{{ kibana_conf_dir }}"
+
+_kb_valid_node_roles: [background_tasks, ui]
+_kb_node_roles: "{{ kibana_node_roles | default(kibana_default_node_roles) }}"
+
+# ---------------------------------------------------------------------------
+# TLS material
+# ---------------------------------------------------------------------------
+# Manually supplied certificates first, then any issued by ansible-role-elastic-tls into
+# elastic_tls_ssl_certificates, so a manual entry always wins when both use one name.
+_kb_ssl_certificates: "{{ (ssl_certificates | default([])) + (elastic_tls_ssl_certificates | default([])) }}"
+_kb_ssl_entry: >-
+  {{ _kb_ssl_certificates
+     | selectattr('name', 'equalto', kibana_ssl_certificate_name)
+     | first | default({}) }}
+_kb_server_ca_content: "{{ _kb_ssl_entry.ca.content | default(kibana_ssl_ca_certificate, true) }}"
+_kb_es_ca_content: "{{ kibana_elasticsearch_ca_certificate | default(_kb_server_ca_content, true) }}"
+# Paths to CA files already on the host, used when no inline content is given.
+_kb_server_ca_path: >-
+  {{ '' if (_kb_server_ca_content | length) > 0
+     else (_kb_ssl_entry.ca.path | default(kibana_ssl_ca_certificate_path, true)) }}
+_kb_es_ca_path: >-
+  {{ '' if (_kb_es_ca_content | length) > 0
+     else (kibana_elasticsearch_ca_certificate_path | default(_kb_server_ca_path, true)) }}
+_kb_ssl_key_passphrase: "{{ _kb_ssl_entry.key.passphrase | default('') }}"
+_kb_server_cert_file: "{{ kibana_ssl_dir }}/kibana.crt"
+_kb_server_key_file: "{{ kibana_ssl_dir }}/kibana.key"
+_kb_server_ca_file: "{{ kibana_ssl_dir }}/ca.crt"
+_kb_es_ca_file: "{{ kibana_ssl_dir }}/elasticsearch-ca.crt"
+
+# ---------------------------------------------------------------------------
+# Keystore
+# ---------------------------------------------------------------------------
+_kb_keystore_desired: >-
+  {{ kibana_keystore_entries
+     | combine({'elasticsearch.serviceAccountToken': kibana_elasticsearch_service_account_token}
+               if kibana_elasticsearch_auth == 'service_account_token' else {})
+     | combine({'elasticsearch.password': kibana_elasticsearch_password}
+               if kibana_elasticsearch_auth == 'basic' else {})
+     | combine({'xpack.security.encryptionKey': kibana_security_encryption_key}
+               if (kibana_security_encryption_key | length) > 0 else {})
+     | combine({'xpack.encryptedSavedObjects.encryptionKey': kibana_encrypted_saved_objects_encryption_key}
+               if (kibana_encrypted_saved_objects_encryption_key | length) > 0 else {})
+     | combine({'xpack.reporting.encryptionKey': kibana_reporting_encryption_key}
+               if (kibana_reporting_encryption_key | length) > 0 else {})
+     | combine({'server.ssl.keyPassphrase': _kb_ssl_key_passphrase}
+               if (kibana_server_ssl_enabled | bool) and (_kb_ssl_key_passphrase | length) > 0 else {}) }}
+
+# ---------------------------------------------------------------------------
+# Hardened hosts
+# ---------------------------------------------------------------------------
+_kb_selinux_manage: >-
+  {{ (kibana_selinux_manage | string | lower) in ['true', 'yes']
+     or ((kibana_selinux_manage | string | lower) == 'auto'
+         and (ansible_facts['selinux']['status'] | default('disabled')) == 'enabled') }}
+# Only paths that were moved away from their packaged locations need a rule.
+_kb_selinux_fcontexts: >-
+  {{ ({kibana_path_data: kibana_selinux_data_type} if kibana_path_data != '/var/lib/kibana' else {})
+     | combine({(kibana_log_file | dirname): kibana_selinux_log_type}
+               if (kibana_log_file | dirname) != '/var/log/kibana' else {})
+     | combine(kibana_selinux_fcontexts) }}
+
+# ---------------------------------------------------------------------------
+# Readiness / API access
+# ---------------------------------------------------------------------------
+_kb_status_url: >-
+  {{ ('https' if kibana_server_ssl_enabled | bool else 'http') ~ '://' ~ kibana_status_check_host ~ ':'
+     ~ kibana_server_port
+     ~ (kibana_server_base_path if (kibana_server_base_path | length > 0 and kibana_server_rewrite_base_path | bool) else '')
+     ~ '/api/status' }}
+_kb_status_auth: "{{ (kibana_status_username | length) > 0 }}"
+
+# Any instance in the play changing version -> coordinated all-instance upgrade
+_kb_deployment_upgrade: >-
+  {{ (ansible_play_hosts | map('extract', hostvars, '_kb_version_changing') | select | list | length) > 0 }}
+
+# Authorization header for Elasticsearch requests made with Kibana's credentials
+_kb_es_auth_headers: >-
+  {{ {'Authorization': 'Bearer ' ~ kibana_elasticsearch_service_account_token}
+     if kibana_elasticsearch_auth == 'service_account_token' else {} }}

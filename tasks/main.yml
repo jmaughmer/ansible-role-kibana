@@ -1,0 +1,74 @@
+---
+# Phase 1 - every host in parallel. Nothing restarts a running Kibana here;
+# changes that need a restart set _kb_restart_required.
+- name: Gather Kibana state
+  ansible.builtin.import_tasks: facts.yml
+  tags: [kibana, always]
+
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [kibana, always]
+
+- name: Configure package repository
+  ansible.builtin.import_tasks: repository.yml
+  when: kibana_repo_source != 'none'
+  tags: [kibana, kibana_install]
+
+- name: Install Kibana
+  ansible.builtin.import_tasks: install.yml
+  tags: [kibana, kibana_install]
+
+- name: Configure operating system and service
+  ansible.builtin.import_tasks: system.yml
+  tags: [kibana, kibana_system]
+
+- name: Manage SELinux file contexts
+  ansible.builtin.import_tasks: selinux.yml
+  when:
+    - _kb_selinux_manage | bool
+    - _kb_selinux_fcontexts | length > 0
+  tags: [kibana, kibana_system]
+
+- name: Install TLS certificates
+  ansible.builtin.import_tasks: certificates.yml
+  tags: [kibana, kibana_tls]
+
+# Runs before the keystore is written so invalid credentials never reach disk.
+- name: Check Elasticsearch connectivity, credentials and version
+  ansible.builtin.import_tasks: elasticsearch_check.yml
+  when: kibana_elasticsearch_check | bool
+  tags: [kibana, kibana_config, kibana_keystore]
+
+- name: Manage keystore
+  ansible.builtin.import_tasks: keystore.yml
+  tags: [kibana, kibana_keystore]
+
+- name: Render kibana.yml
+  ansible.builtin.import_tasks: configure.yml
+  tags: [kibana, kibana_config]
+
+# Phase 2 - start hosts, then either a coordinated upgrade (all instances
+# stopped together, as Kibana requires) or a batched rolling restart.
+- name: Start service
+  ansible.builtin.import_tasks: service.yml
+  tags: [kibana, kibana_service]
+
+- name: Coordinated upgrade
+  ansible.builtin.include_tasks:
+    file: upgrade.yml
+    apply:
+      tags: [kibana, kibana_service]
+  when:
+    - inventory_hostname == ansible_play_hosts | first
+    - _kb_deployment_upgrade | bool
+  tags: [kibana, kibana_service]
+
+- name: Rolling restart
+  ansible.builtin.include_tasks:
+    file: rolling_restart.yml
+    apply:
+      tags: [kibana, kibana_service]
+  when:
+    - inventory_hostname == ansible_play_hosts | first
+    - not (_kb_deployment_upgrade | bool)
+  tags: [kibana, kibana_service]

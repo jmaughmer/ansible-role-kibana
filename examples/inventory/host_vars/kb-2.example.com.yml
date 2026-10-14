@@ -1,0 +1,14 @@
+---
+kibana_node_roles: [ui, background_tasks]
+kibana_max_old_space_size_mb: 4096
+
+ssl_certificates:
+  - name: "kb-2.example.com"
+    certificate:
+      content: |
+        -----BEGIN CERTIFICATE-----
+        REPLACE-WITH-NODE-CERTIFICATE (SAN: kb-2.example.com and kibana.example.com)
+        -----END CERTIFICATE-----
+    key:
+      content: |
+        REPLACE-WITH-VAULTED-PRIVATE-KEY

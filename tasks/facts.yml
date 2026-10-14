@@ -1,0 +1,37 @@
+---
+- name: Facts | Gather minimal system facts
+  ansible.builtin.setup:
+    gather_subset: [min]
+  register: _kb_setup
+  until: _kb_setup is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  when: ansible_facts['os_family'] is not defined
+
+- name: Facts | Query installed Kibana package version
+  ansible.builtin.command:
+    cmd: rpm -q --queryformat '%{VERSION}' kibana
+  register: _kb_rpm_query
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Facts | Query Kibana service state
+  ansible.builtin.command:
+    cmd: systemctl is-active kibana
+  register: _kb_service_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Facts | Set Kibana facts
+  ansible.builtin.set_fact:
+    _kb_installed_version: "{{ (_kb_rpm_query.stdout | trim) if _kb_rpm_query.rc == 0 else '' }}"
+    _kb_is_running: "{{ (_kb_service_state.stdout | trim) == 'active' }}"
+    _kb_target_version: "{{ kibana_version }}"
+    _kb_status_url_fact: "{{ _kb_status_url }}"
+    _kb_restart_required: false
+
+- name: Facts | Derive version facts
+  ansible.builtin.set_fact:
+    _kb_version_changing: "{{ (_kb_installed_version | length) > 0 and _kb_installed_version != kibana_version }}"

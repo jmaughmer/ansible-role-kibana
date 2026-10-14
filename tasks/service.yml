@@ -1,0 +1,40 @@
+---
+- name: Service | Enable Kibana service
+  ansible.builtin.systemd_service:
+    name: kibana
+    enabled: true
+
+# During a version upgrade upgrade.yml starts every instance in order instead.
+- name: Service | Start Kibana on hosts that are not running
+  ansible.builtin.systemd_service:
+    name: kibana
+    state: started
+    no_block: true
+  register: _kb_service_started
+  when:
+    - not (_kb_is_running | bool)
+    - not (_kb_deployment_upgrade | bool)
+
+- name: Service | Wait for started hosts
+  ansible.builtin.include_tasks: wait_ready.yml
+  vars:
+    _kb_wait_host: "{{ inventory_hostname }}"
+    _kb_wait_retries: "{{ kibana_migration_retries }}"
+  when: _kb_service_started is changed
+
+- name: Service | Determine hosts that need a rolling restart
+  ansible.builtin.set_fact:
+    _kb_needs_rolling: >-
+      {{ (_kb_is_running | bool)
+         and ((kibana_force_restart | bool)
+              or ((_kb_restart_required | bool) and (kibana_restart_on_change | bool))) }}
+
+- name: Service | Report restarts that were skipped
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} has changes that require a restart, but kibana_restart_on_change is
+      false. Restart it manually or re-run with -e kibana_force_restart=true.
+  when:
+    - _kb_is_running | bool
+    - _kb_restart_required | bool
+    - not (kibana_restart_on_change | bool)

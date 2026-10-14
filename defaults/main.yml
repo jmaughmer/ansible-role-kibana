@@ -1,0 +1,254 @@
+---
+# =============================================================================
+# Platform
+# =============================================================================
+# Distributions accepted by preflight, as reported by ansible_facts['distribution'].
+# Major versions 9 and 10 are supported. Other Enterprise Linux rebuilds, such as
+# CentOS (Stream) or OracleLinux, can be added here but are not tested.
+kibana_supported_distributions:
+  - RedHat
+  - AlmaLinux
+  - Rocky
+
+# =============================================================================
+# Package / repository
+# =============================================================================
+# Exact 9.x release. Must not be newer (major.minor) than Elasticsearch.
+# Changing it on running hosts triggers a coordinated all-instance upgrade.
+kibana_version: "9.5.4"
+
+# Where the kibana package comes from:
+#   elastic   - Elastic's public repository, or a mirror of it. The role writes a
+#               disabled repository file and enables it only for its own dnf tasks.
+#   satellite - a repository synced into Red Hat Satellite or Katello and delivered
+#               through subscription-manager (redhat.repo). Hosts must be registered
+#               and the repository must be in their content view.
+#   none      - repositories are managed outside this role; packages come from
+#               whatever repositories are enabled on the host.
+# kibana_extra_packages always come from the host's enabled repositories.
+kibana_repo_source: elastic
+
+# --- kibana_repo_source: elastic ---
+kibana_repo_baseurl: "https://artifacts.elastic.co/packages/{{ _kb_major_version }}.x/yum"
+kibana_repo_gpgkey: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
+kibana_repo_gpgcheck: true
+
+# --- kibana_repo_source: satellite ---
+# Repository id as listed by `subscription-manager repos --list`, normally
+# <organization label>_<product label>_<repository label>, e.g. ACME_Elastic_Elastic_9_x
+kibana_satellite_repo_id: ""
+# unmanaged - leave the enabled state to Satellite (activation key, content overrides)
+# enabled   - enable it with subscription-manager
+# disabled  - disable it so routine `dnf update` never upgrades Kibana; the role
+#             still installs from it by enabling it for its own dnf tasks
+kibana_satellite_repo_state: unmanaged
+# Content overrides applied with `subscription-manager repo-override`, as strings.
+# Useful for slow links, since redhat.repo cannot be edited directly:
+#   { timeout: "600", retries: "20", minrate: "100" }
+kibana_satellite_repo_overrides: {}
+# Run `subscription-manager refresh` once when the repository is not yet defined on the host.
+kibana_satellite_refresh: true
+# Optional GPG key to import: a URL (e.g. the product's content credential on Satellite) or
+# a path on the host. Empty relies on the repository's own gpgkey setting, which dnf imports.
+kibana_satellite_gpgkey: ""
+
+# Before installing or upgrading, check that kibana_version is available from the
+# package source. Catches Satellite content views that were not published or promoted.
+kibana_package_version_check: true
+
+# Extra OS packages, e.g. fonts/libraries needed by Reporting (headless Chromium):
+#   [fontconfig, freetype, nss, ipa-gothic-fonts, xorg-x11-fonts-100dpi, xorg-x11-fonts-75dpi]
+kibana_extra_packages: []
+
+# Inventory group containing every Kibana instance of this deployment. All of
+# them must be stopped together during upgrades.
+kibana_group: kibana
+
+# =============================================================================
+# Paths
+# =============================================================================
+kibana_home: /usr/share/kibana
+kibana_conf_dir: /etc/kibana
+kibana_path_data: /var/lib/kibana
+kibana_log_dir: /var/log/kibana
+kibana_ssl_dir: /etc/kibana/certs
+
+# =============================================================================
+# Server
+# =============================================================================
+kibana_server_name: "{{ inventory_hostname }}"
+kibana_server_host: "0.0.0.0"
+kibana_server_port: 5601
+# URL users reach Kibana on - the load balancer URL when there are several instances.
+kibana_server_public_base_url: "https://{{ inventory_hostname }}:{{ kibana_server_port }}"
+kibana_server_base_path: ""
+kibana_server_rewrite_base_path: false
+
+# TLS on the Kibana HTTP server, using the host's `ssl_certificates` entry.
+# Disable only when TLS is terminated in front of Kibana.
+kibana_server_ssl_enabled: true
+kibana_ssl_certificate_name: "{{ inventory_hostname }}"
+# PEM CA that issued the Kibana server certificates.
+kibana_ssl_ca_certificate: ""
+# Path to a CA file already on the host, as an alternative to the content above
+# (for example one installed by ansible-role-elastic-tls).
+kibana_ssl_ca_certificate_path: ""
+
+# Per host (host_vars): which Kibana node roles this instance runs.
+#   kibana_node_roles: [ui]                 # UI-only instance behind the load balancer
+#   kibana_node_roles: [background_tasks]   # dedicated task manager instance
+kibana_default_node_roles: [background_tasks, ui]
+
+# =============================================================================
+# Connection to Elasticsearch
+# =============================================================================
+# Inventory group of Elasticsearch nodes; used to build kibana_elasticsearch_hosts.
+kibana_elasticsearch_group: elasticsearch
+kibana_elasticsearch_port: 9200
+kibana_elasticsearch_hosts: >-
+  {{ groups[kibana_elasticsearch_group] | default([])
+     | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':' ~ kibana_elasticsearch_port) | list }}
+# PEM CA for the Elasticsearch HTTP certificates. Empty = kibana_ssl_ca_certificate.
+kibana_elasticsearch_ca_certificate: ""
+# Path to a CA file already on the host, as an alternative to the content above.
+kibana_elasticsearch_ca_certificate_path: ""
+kibana_elasticsearch_ssl_verification_mode: full
+
+# Authentication - service_account_token (recommended) or basic.
+kibana_elasticsearch_auth: service_account_token
+# Token for the elastic/kibana service account (vault). Create one with:
+#   POST /_security/service/elastic/kibana/credential/token/<name>
+kibana_elasticsearch_service_account_token: ""
+# Basic auth (normally the built-in kibana_system user)
+kibana_elasticsearch_username: kibana_system
+kibana_elasticsearch_password: ""
+# With basic auth: set the user's password through the Elasticsearch API when it
+# does not authenticate, using the admin credentials below.
+kibana_elasticsearch_manage_password: false
+kibana_elasticsearch_admin_username: elastic
+kibana_elasticsearch_admin_password: ""
+
+# Check connectivity, credentials and Elasticsearch version compatibility from
+# every Kibana host before changing configuration.
+kibana_elasticsearch_check: true
+
+kibana_elasticsearch_request_timeout: 30000
+kibana_elasticsearch_shard_timeout: 30000
+kibana_elasticsearch_ping_timeout: 30000
+
+# =============================================================================
+# Security
+# =============================================================================
+# 32+ character keys (vault). They MUST be identical on every Kibana instance of
+# the deployment. Generate with: openssl rand -hex 32
+kibana_security_encryption_key: ""
+kibana_encrypted_saved_objects_encryption_key: ""
+kibana_reporting_encryption_key: ""
+
+kibana_session_idle_timeout: 8h
+kibana_session_lifespan: 30d
+# Authentication providers, rendered under xpack.security.authc.providers.
+# Empty keeps Kibana's default (basic login; AD users authenticate through the
+# Elasticsearch AD realm). Example:
+#   basic:
+#     basic1: { order: 0 }
+kibana_auth_providers: {}
+
+# Additional secure settings stored in the Kibana keystore { "setting": "value" }
+kibana_keystore_entries: {}
+kibana_keystore_purge: false
+
+# =============================================================================
+# Operation / tuning
+# =============================================================================
+# Node.js heap (MB) via node.options; empty keeps Kibana's default.
+kibana_max_old_space_size_mb: ""
+
+kibana_log_level: info
+kibana_log_file: "{{ kibana_log_dir }}/kibana.log"
+kibana_log_rolling_size: 100mb
+kibana_log_rolling_files: 7
+
+kibana_telemetry_opt_in: false
+
+# Flat kibana.yml settings merged last (override anything above), e.g.
+#   xpack.task_manager.capacity: 20
+#   server.maxPayload: 1048576
+#   xpack.reporting.capture.timeouts.waitForElements: 60s
+kibana_settings_extra: {}
+
+# Extra environment for the service (/etc/sysconfig/kibana)
+kibana_environment: {}
+
+kibana_systemd_limit_nofile: 65535
+
+kibana_manage_firewall: true
+kibana_firewall_zone: public
+# The server port is opened for you. These are for anything else this host
+# serves, in firewalld's own form:
+#   kibana_firewall_ports: ["80/tcp"]
+kibana_firewall_ports: []
+# Named firewalld services, e.g. ["http"]
+kibana_firewall_services: []
+
+# =============================================================================
+# Restarts / readiness
+# =============================================================================
+kibana_restart_on_change: true
+kibana_force_restart: false
+kibana_restart_batch_size: 1
+kibana_restart_pause_seconds: 0
+
+# Readiness probe: /api/status must answer (200, or 401 when anonymous status is
+# not allowed). When credentials are set the overall level must be "available".
+kibana_status_check_host: "{{ inventory_hostname }}"
+kibana_status_username: ""
+kibana_status_password: ""
+kibana_ready_retries: 60
+kibana_ready_delay: 5
+# The first instance started after an upgrade runs saved object migrations.
+kibana_migration_retries: 360
+# Allow an upgrade when some instances of kibana_group are not in the play
+# (only when those instances are known to be stopped).
+kibana_upgrade_allow_partial: false
+kibana_stop_retries: 60
+kibana_stop_delay: 5
+
+# =============================================================================
+# Hardened hosts (SELinux, TLS)
+# =============================================================================
+# SELinux: label data and log directories that have been moved out of their
+# default locations, which otherwise end up as default_t.
+#   auto  - manage them when SELinux is enabled on the host
+#   true / false
+kibana_selinux_manage: auto
+kibana_selinux_data_type: var_lib_t
+kibana_selinux_log_type: var_log_t
+# Extra or overriding contexts: { "/srv/kibana": "var_lib_t" }
+kibana_selinux_fcontexts: {}
+
+# TLS protocols and cipher suites Kibana serves. Empty keeps Kibana's defaults
+# (TLSv1.3 and TLSv1.2).
+#   kibana_server_ssl_supported_protocols: ["TLSv1.3", "TLSv1.2"]
+kibana_server_ssl_supported_protocols: []
+kibana_server_ssl_cipher_suites: []
+
+# =============================================================================
+# Network resilience (high-latency / low-bandwidth links)
+# See README.md (Slow and unreliable networks) and examples/inventory/group_vars/all/network.yml
+# =============================================================================
+# Retries for tasks that download (GPG key, packages) or call Elasticsearch.
+kibana_task_retries: 3
+kibana_task_delay: 15
+# Package downloads run as async jobs so they keep running on the host if the
+# SSH session drops: maximum run time and poll interval (seconds).
+kibana_download_async_timeout: 3600
+kibana_download_async_poll: 15
+# dnf repository per-request timeout (seconds) and download retries
+kibana_repo_timeout: 120
+kibana_repo_retries: 10
+kibana_dnf_lock_timeout: 300
+# Per-request HTTP timeout (seconds) for Elasticsearch and Kibana status calls
+kibana_api_timeout: 30
+
+kibana_no_log: true
