@@ -471,8 +471,8 @@ MOLECULE_DISTRO=rockylinux10 molecule test -s preflight
 ```
 
 Lint with `yamllint .` and `ansible-lint` (configured by [`.yamllint`](.yamllint) and
-[`.ansible-lint`](.ansible-lint)). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs both,
-then every Podman scenario on both distros.
+[`.ansible-lint`](.ansible-lint)). There is no GitHub Actions workflow; run the lint and Molecule
+scenarios locally.
 
 Not covered by containers: SELinux contexts for relocated directories, firewalld rules,
 FIPS mode, and Satellite repositories. These need virtual machines with SELinux enforcing,
