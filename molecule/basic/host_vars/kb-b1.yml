@@ -1,0 +1,22 @@
+---
+# Overrides the shared group_vars (../default/inventory/group_vars/kibana.yml).
+
+# kibana_system has no password until the role sets it, using the file-realm
+# superuser prepare.yml created.
+kibana_elasticsearch_auth: basic
+kibana_elasticsearch_password: molecule-kibana-system-password
+kibana_elasticsearch_manage_password: true
+kibana_elasticsearch_admin_username: "{{ test_admin_user }}"
+kibana_elasticsearch_admin_password: "{{ test_admin_password }}"
+
+# Inline PEM content, as it would come from a vault. The key is the PKCS#8
+# encrypted copy prepare.yml made; its passphrase goes into the keystore.
+ssl_certificates:
+  - name: kb-b1
+    certificate:
+      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/kb-b1.crt', rstrip=false) }}"
+    key:
+      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/kb-b1.enc.key', rstrip=false) }}"
+      passphrase: "{{ test_key_passphrase }}"
+    ca:
+      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/ca.crt', rstrip=false) }}"

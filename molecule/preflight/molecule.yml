@@ -1,0 +1,48 @@
+---
+# Preflight only: each case in converge.yml runs the role's facts and
+# preflight tasks with settings that must be refused, and checks the run
+# fails in the right check, with the right message, and without printing a
+# secret. Nothing is installed and no Elasticsearch is needed, so there is no
+# prepare, idempotence or verify step.
+#   molecule test -s preflight
+#
+# kbp-1 is also in the group "other", so one case can leave kbp-2 outside
+# kibana_group.
+role_name_check: 1
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_SCENARIO_DIRECTORY}/../default/requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: kbp-1
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_preflight
+    groups: [kibana, other]
+
+  - name: kbp-2
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_preflight
+    groups: [kibana]
+
+provisioner:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - converge
+    - destroy

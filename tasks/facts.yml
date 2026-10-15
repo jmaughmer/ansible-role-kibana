@@ -9,7 +9,7 @@
   when: ansible_facts['os_family'] is not defined
 
 - name: Facts | Query installed Kibana package version
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module - package_facts reads every package; this needs one
     cmd: rpm -q --queryformat '%{VERSION}' kibana
   register: _kb_rpm_query
   changed_when: false
@@ -17,7 +17,7 @@
   check_mode: false
 
 - name: Facts | Query Kibana service state
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module - only reads the state, which must not fail when the unit is absent
     cmd: systemctl is-active kibana
   register: _kb_service_state
   changed_when: false

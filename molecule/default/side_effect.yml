@@ -1,0 +1,107 @@
+---
+# Runs after the idempotence and check-mode runs, on the converged instances.
+# Each step applies the role with different settings and checks which
+# instances were restarted:
+#   1. a kibana.yml change: a rolling restart, one instance per batch;
+#   2. a keystore change with kibana_restart_on_change: false: noticed, but
+#      nothing restarts;
+#   3. the converge settings with kibana_force_restart: both restart.
+# verify.yml then sees the converge settings again.
+- name: Record the state before any change
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Read Kibana's main PID
+      ansible.builtin.systemd_service:
+        name: kibana
+      register: test_unit
+      when: inventory_hostname in groups['kibana']
+
+    - name: Remember it
+      ansible.builtin.set_fact:
+        test_pid_before: "{{ test_unit.status.MainPID }}"
+      when: inventory_hostname in groups['kibana']
+
+- name: Change a kibana.yml setting
+  hosts: kibana
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: "{{ test_role_dir }}"
+      vars:
+        kibana_settings_extra:
+          server.maxPayload: 2097152
+
+    - name: Check the restart plan had one instance per batch
+      ansible.builtin.assert:
+        that:
+          - hostvars[ansible_play_hosts | first]._kb_roll_batches == ansible_play_hosts | batch(1) | list
+        fail_msg: "Restart plan: {{ hostvars[ansible_play_hosts | first]._kb_roll_batches }}"
+      run_once: true
+
+    - name: Check the setting was written
+      ansible.builtin.command:
+        argv: [grep, -qxF, "server.maxPayload: 2097152", /etc/kibana/kibana.yml]
+      changed_when: false
+
+    - name: Check every instance was restarted
+      ansible.builtin.include_tasks: tasks/check_restart.yml
+      vars:
+        test_restarted: true
+
+- name: Change an encryption key without restarting
+  hosts: kibana
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the keystore state
+      ansible.builtin.slurp:
+        src: /etc/kibana/.ansible-keystore-state.json
+      register: test_state_before
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: "{{ test_role_dir }}"
+      vars:
+        kibana_restart_on_change: false
+        kibana_reporting_encryption_key: molecule-rotated-reporting-key-0123456789
+
+    - name: Read the keystore state again
+      ansible.builtin.slurp:
+        src: /etc/kibana/.ansible-keystore-state.json
+      register: test_state_after
+
+    - name: Check the change was recorded and flagged, but nothing was restarted
+      vars:
+        test_before: "{{ (test_state_before.content | b64decode | from_json).entries }}"
+        test_after: "{{ (test_state_after.content | b64decode | from_json).entries }}"
+      ansible.builtin.assert:
+        that:
+          - test_after['xpack.reporting.encryptionKey'] != test_before['xpack.reporting.encryptionKey']
+          - test_after | dict2items | rejectattr('key', 'equalto', 'xpack.reporting.encryptionKey') | list
+            == test_before | dict2items | rejectattr('key', 'equalto', 'xpack.reporting.encryptionKey') | list
+          - _kb_restart_required | bool
+          - not (_kb_needs_rolling | bool)
+
+    - name: Check no instance was restarted
+      ansible.builtin.include_tasks: tasks/check_restart.yml
+      vars:
+        test_restarted: false
+
+- name: Go back to the converge settings with a forced restart
+  hosts: kibana
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: "{{ test_role_dir }}"
+      vars:
+        kibana_force_restart: true
+
+    - name: Check every instance was restarted
+      ansible.builtin.include_tasks: tasks/check_restart.yml
+      vars:
+        test_restarted: true

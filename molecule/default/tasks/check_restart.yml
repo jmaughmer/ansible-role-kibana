@@ -1,0 +1,23 @@
+---
+# Included after each change in side_effect.yml: Kibana was restarted (a new
+# main PID) exactly when test_restarted says so, and is running. The PID is
+# then remembered for the next step.
+- name: Read Kibana's main PID
+  ansible.builtin.systemd_service:
+    name: kibana
+  register: test_unit
+
+- name: Check Kibana was {{ 'restarted' if test_restarted else 'left running' }}
+  ansible.builtin.assert:
+    that:
+      - test_unit.status.ActiveState == 'active'
+      - test_unit.status.MainPID | int > 0
+      - (test_unit.status.MainPID | int != test_pid_before | int) == test_restarted
+    fail_msg: >-
+      On {{ inventory_hostname }} Kibana's PID went from {{ test_pid_before }} to
+      {{ test_unit.status.MainPID }} ({{ test_unit.status.ActiveState }}); expected
+      {{ 'a restart' if test_restarted else 'the same process' }}.
+
+- name: Remember the PID
+  ansible.builtin.set_fact:
+    test_pid_before: "{{ test_unit.status.MainPID }}"

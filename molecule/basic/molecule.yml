@@ -1,0 +1,61 @@
+---
+# One Kibana instance with the alternatives to the default scenario's settings
+# (host_vars/kb-b1.yml):
+#   - basic authentication as kibana_system, whose password the role sets in
+#     Elasticsearch with admin credentials (kibana_elasticsearch_manage_password);
+#   - TLS material given inline, as from a vault, with an encrypted key and its
+#     passphrase.
+#   molecule test -s basic
+# Prepare, converge and verify are the default scenario's.
+role_name_check: 1
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_SCENARIO_DIRECTORY}/../default/requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: kes-b1
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_basic
+    groups: [elasticsearch]
+
+  - name: kb-b1
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_basic
+    groups: [kibana]
+
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: ../default/prepare.yml
+    converge: ../default/converge.yml
+    verify: ../default/verify.yml
+  inventory:
+    links:
+      group_vars: ../default/inventory/group_vars/
+      host_vars: host_vars/
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

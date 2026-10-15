@@ -1,0 +1,69 @@
+---
+# The coordinated upgrade: two instances converge at an older release
+# (converge.yml), then side_effect.yml checks that
+#   - an upgrade run that leaves an instance out is refused, changing nothing;
+#   - the upgrade to the role's default version stops every instance before
+#     the first one starts again, and starts that one alone until it is ready;
+#   - going back to the older release is refused.
+#   molecule test -s upgrade
+# Prepare and verify are the default scenario's; verify expects the default
+# version.
+role_name_check: 1
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_SCENARIO_DIRECTORY}/../default/requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: kes-u1
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_upgrade
+    groups: [elasticsearch]
+
+  - name: kb-u1
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_upgrade
+    groups: [kibana]
+
+  - name: kb-u2
+    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    network: kibana_upgrade
+    groups: [kibana]
+
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: ../default/prepare.yml
+    verify: ../default/verify.yml
+  inventory:
+    links:
+      group_vars: ../default/inventory/group_vars/
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - destroy

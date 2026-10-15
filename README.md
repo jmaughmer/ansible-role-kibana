@@ -418,6 +418,66 @@ correctly where the package puts them; moved elsewhere they come out as `default
 
 [`defaults/main.yml`](defaults/main.yml) documents every variable.
 
+## Testing
+
+[`molecule/default/`](molecule/default/) runs the role against three systemd containers on one
+container network: `kes-1`, a single Elasticsearch node at the role's default `kibana_version`, and
+two Kibana instances, `kb-1` and `kb-2`. [`prepare.yml`](molecule/default/prepare.yml) makes a test CA
+and a certificate for every host, starts Elasticsearch with TLS on HTTP, and creates a service
+account token for `elastic/kibana`. The Kibana certificates are left on the hosts as files, as
+ansible-role-elastic-tls leaves them. The sequence is:
+
+1. **converge**, then **idempotence**: a second converge must change nothing;
+2. **check**: converge in check mode on the installed hosts, which must not fail;
+3. **side effect** ([`side_effect.yml`](molecule/default/side_effect.yml)):
+   - a `kibana.yml` change restarts both instances, one per batch;
+   - a keystore change with `kibana_restart_on_change: false` is recorded and flagged, but
+     restarts nothing;
+   - `kibana_force_restart` restarts both;
+4. **verify** ([`verify.yml`](molecule/default/verify.yml)):
+   - Kibana is running and enabled at the default version;
+   - the configuration, keystore, keystore state, certificates and key have their owners and
+     modes, and `kibana.yml` holds no secret;
+   - the keystore holds exactly the managed entries;
+   - the heap size, file limit and service environment are applied;
+   - `/api/status`, reached through the server certificate, reports Kibana, its Elasticsearch
+     connection and saved objects `available`;
+   - a session cookie issued by one instance is accepted by the other, so the encryption keys
+     match.
+
+Other scenarios:
+
+| Scenario | What it covers |
+|---|---|
+| `basic` | Basic authentication as `kibana_system`, whose password the role sets with admin credentials, and TLS material given inline with an encrypted key and its passphrase. |
+| `upgrade` | Two instances at an older 9.x release are upgraded to the default version. An upgrade run that leaves an instance out is refused first. Every instance stops before the first starts again, and that one starts alone. Going back to the older release is refused. |
+| `preflight` | Settings preflight must refuse, each in its own check, without printing a secret. These include an unsupported distribution, a host outside `kibana_group`, an inexact or 8.x version, a bad package source, unknown node roles, missing or forbidden credentials, short or differing encryption keys, a malformed firewall port, and missing TLS material. Nothing is installed. |
+| `docker` | The default scenario on Docker instead of Podman. |
+
+```bash
+pip install -r molecule/requirements.txt
+```
+
+```bash
+for s in default basic upgrade preflight; do molecule test -s "$s" || break; done
+```
+
+The scenarios use Podman (rootless works), except `docker`, which needs Docker. They download
+Elasticsearch and Kibana from Elastic's repository, and Elasticsearch and two Kibana instances need
+about 4 GB of memory. `MOLECULE_DISTRO` picks the image (default `rockylinux9`; also `rockylinux10`):
+
+```bash
+MOLECULE_DISTRO=rockylinux10 molecule test -s preflight
+```
+
+Lint with `yamllint .` and `ansible-lint` (configured by [`.yamllint`](.yamllint) and
+[`.ansible-lint`](.ansible-lint)). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs both,
+then every Podman scenario on both distros.
+
+Not covered by containers: SELinux contexts for relocated directories, firewalld rules,
+FIPS mode, and Satellite repositories. These need virtual machines with SELinux enforcing,
+firewalld running, FIPS enabled, or a Satellite registration.
+
 ## Role layout
 
 ```
@@ -440,7 +500,8 @@ correctly where the package puts them; moved elsewhere they come out as `default
 │   ├── rolling_restart.yml / restart_batch.yml
 │   └── upgrade.yml              # coordinated all-instance upgrade
 ├── templates/
-└── examples/
+├── examples/
+└── molecule/                   # default, basic, upgrade, preflight (Podman) and docker scenarios
 ```
 
 ## Related roles

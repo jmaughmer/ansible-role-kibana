@@ -29,7 +29,7 @@
       loop: "{{ ansible_play_hosts }}"
 
     - name: Upgrade | Wait for every instance to stop
-      ansible.builtin.command:
+      ansible.builtin.command:  # noqa: command-instead-of-module - only reads the state while the unit stops
         cmd: systemctl is-active kibana
       delegate_to: "{{ item }}"
       loop: "{{ ansible_play_hosts }}"
@@ -55,6 +55,17 @@
       until: _kb_upgrade_package is not failed
       retries: "{{ kibana_task_retries }}"
       delay: "{{ kibana_task_delay }}"
+
+    # The package upgrade hands the configuration directory to the kibana
+    # group, including the role's checksum file, which stays root's own.
+    - name: Upgrade | Restore ownership of the keystore state file
+      ansible.builtin.file:
+        path: "{{ _kb_keystore_state_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      delegate_to: "{{ item }}"
+      loop: "{{ _kb_upgrade_hosts }}"
 
     - name: Upgrade | Start the migration instance
       ansible.builtin.systemd_service:

@@ -39,6 +39,7 @@
   loop_control:
     label: "{{ item.key }} -> {{ item.value }}"
   register: _kb_selinux_fcontext
+  changed_when: true
   # already defined with this type: semanage reports it and changes nothing
   when: >-
     (_kb_selinux_local.stdout | default('')) is not search(

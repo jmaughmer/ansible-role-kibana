@@ -20,7 +20,7 @@
   vars:
     _kb_wait_host: "{{ inventory_hostname }}"
     _kb_wait_retries: "{{ kibana_migration_retries }}"
-  when: _kb_service_started is changed
+  when: _kb_service_started is changed  # noqa: no-handler - the wait has to finish before the restart plan is built
 
 - name: Service | Determine hosts that need a rolling restart
   ansible.builtin.set_fact:

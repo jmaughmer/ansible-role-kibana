@@ -1,0 +1,33 @@
+---
+# Role settings shared by every scenario that installs Kibana. The basic
+# scenario overrides the authentication and TLS settings in its host_vars.
+
+kibana_elasticsearch_hosts: ["https://{{ test_es_address }}:9200"]
+
+kibana_elasticsearch_auth: service_account_token
+kibana_elasticsearch_service_account_token: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/service_token') }}"
+
+# Test values; identical on every instance, as the role requires.
+kibana_security_encryption_key: molecule-security-key-0123456789abcdef
+kibana_encrypted_saved_objects_encryption_key: molecule-saved-objects-key-0123456789abcdef
+kibana_reporting_encryption_key: molecule-reporting-key-0123456789abcdef
+
+# Files already on the host, as ansible-role-elastic-tls leaves them;
+# prepare.yml puts them there.
+ssl_certificates:
+  - name: "{{ inventory_hostname }}"
+    certificate:
+      path: /etc/pki/molecule/kibana.crt
+    key:
+      path: /etc/pki/molecule/kibana.key
+    ca:
+      path: /etc/pki/molecule/ca.crt
+
+# Exercises node.options
+kibana_max_old_space_size_mb: 1024
+
+# Show what was rendered if a run fails.
+kibana_no_log: false
+# Retry less: a failure in a container is not a flaky satellite link.
+kibana_task_retries: 2
+kibana_task_delay: 5

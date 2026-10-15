@@ -11,4 +11,4 @@
 - name: Configure | Flag restart for configuration changes
   ansible.builtin.set_fact:
     _kb_restart_required: true
-  when: _kb_config_file is changed
+  when: _kb_config_file is changed  # noqa: no-handler - restarts are batched by rolling_restart.yml, not notified

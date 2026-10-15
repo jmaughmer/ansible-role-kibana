@@ -26,11 +26,15 @@
       retries: "{{ kibana_task_retries }}"
       delay: "{{ kibana_task_delay }}"
       failed_when: false
+      # read-only, so it also runs in check mode
+      check_mode: false
       no_log: "{{ kibana_no_log }}"
 
     - name: Elasticsearch | Set Kibana user password with admin credentials
       ansible.builtin.uri:
-        url: "{{ (_kb_es_user_probe.results | selectattr('status', 'equalto', 401) | first).item }}/_security/user/{{ kibana_elasticsearch_username | urlencode }}/_password"
+        url: >-
+          {{ (_kb_es_user_probe.results | selectattr('status', 'equalto', 401) | first).item
+          }}/_security/user/{{ kibana_elasticsearch_username | urlencode }}/_password
         method: POST
         url_username: "{{ kibana_elasticsearch_admin_username }}"
         url_password: "{{ kibana_elasticsearch_admin_password }}"
@@ -69,6 +73,8 @@
   retries: "{{ kibana_task_retries }}"
   delay: "{{ kibana_task_delay }}"
   failed_when: false
+  # read-only, so it also runs in check mode
+  check_mode: false
   no_log: "{{ kibana_no_log }}"
 
 - name: Elasticsearch | Summarise probe results

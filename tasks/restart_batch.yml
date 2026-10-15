@@ -1,5 +1,5 @@
 ---
-- name: "Rolling restart | Batch {{ _kb_batch_index + 1 }}/{{ _kb_roll_batches | length }}: {{ _kb_batch | join(', ') }}"
+- name: "Rolling restart | Batch {{ (_kb_batch_index + 1) ~ '/' ~ (_kb_roll_batches | length) ~ ': ' ~ (_kb_batch | join(', ')) }}"
   block:
     - name: Rolling restart | Restart Kibana
       ansible.builtin.systemd_service:

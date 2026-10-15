@@ -1,0 +1,110 @@
+---
+# Runs on the instances converged at test_old_version (vars/upgrade.yml).
+- name: Gather facts from every host
+  hosts: all
+  gather_facts: true
+  tasks: []
+
+# What `--limit kb-u1` gives the role: the other instance is outside the play,
+# so it would keep running the old release against migrated indices.
+- name: Refuse an upgrade that leaves an instance out
+  hosts: kibana[0]
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/upgrade.yml
+  tasks:
+    - name: Upgrade the first instance alone
+      block:
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: "{{ test_role_dir }}"
+
+        - name: Fail, since the role went ahead
+          ansible.builtin.fail:
+            msg: The role started an upgrade with an instance missing from the play.
+
+      rescue:
+        - name: Check preflight refused it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Preflight | Verify upgrades include every Kibana instance'
+              - ansible_failed_result.msg is search('does not support rolling upgrades')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}': {{ ansible_failed_result.msg | default('') }}"
+
+    - name: Read the installed version
+      ansible.builtin.command: rpm -q --queryformat '%{VERSION}' kibana  # noqa: command-instead-of-module - reads one package's version
+      register: test_rpm
+      changed_when: false
+      failed_when: test_rpm.stdout != test_old_version
+
+- name: Upgrade every instance
+  hosts: kibana
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: "{{ test_role_dir }}"
+
+    - name: Read the installed version
+      ansible.builtin.command: rpm -q --queryformat '%{VERSION}' kibana  # noqa: command-instead-of-module - reads one package's version
+      register: test_rpm
+      changed_when: false
+      failed_when: test_rpm.stdout != test_default_version
+
+    # Monotonic timestamps (microseconds): the containers share one kernel,
+    # so they compare across hosts.
+    - name: Read when Kibana last stopped and started
+      ansible.builtin.systemd_service:
+        name: kibana
+      register: test_unit
+
+    - name: Check every instance stopped before the first started, and it started alone
+      vars:
+        test_leader: "{{ ansible_play_hosts | first }}"
+        test_others: "{{ ansible_play_hosts | reject('equalto', test_leader) | list }}"
+        test_stopped: "{{ ansible_play_hosts | map('extract', hostvars, ['test_unit', 'status', 'InactiveEnterTimestampMonotonic']) | map('int') | list }}"
+        test_leader_started: "{{ hostvars[test_leader].test_unit.status.ActiveEnterTimestampMonotonic | int }}"
+        test_others_started: "{{ test_others | map('extract', hostvars, ['test_unit', 'status', 'ActiveEnterTimestampMonotonic']) | map('int') | list }}"
+      ansible.builtin.assert:
+        that:
+          - test_stopped | max < test_leader_started | int
+          - test_others_started | select('le', test_leader_started | int) | list | length == 0
+        fail_msg: >-
+          Stopped at {{ test_stopped }}; {{ test_leader }} started at {{ test_leader_started }},
+          {{ test_others }} at {{ test_others_started }}.
+      run_once: true
+
+- name: Refuse a downgrade
+  hosts: kibana
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/upgrade.yml
+  tasks:
+    - name: Go back to the older release
+      block:
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: "{{ test_role_dir }}"
+          vars:
+            kibana_version: "{{ test_old_version }}"
+
+        - name: Fail, since the role went ahead
+          ansible.builtin.fail:
+            msg: The role accepted a downgrade.
+
+      rescue:
+        - name: Check preflight refused it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Preflight | Verify Kibana version'
+              - ansible_failed_result.msg is search('downgrades and major upgrades are not supported')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}': {{ ansible_failed_result.msg | default('') }}"
+
+    - name: Read the installed version
+      ansible.builtin.command: rpm -q --queryformat '%{VERSION}' kibana  # noqa: command-instead-of-module - reads one package's version
+      register: test_rpm
+      changed_when: false
+      failed_when: test_rpm.stdout != test_default_version

@@ -1,0 +1,29 @@
+---
+# Shared by every case in converge.yml
+test_role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+test_first: "{{ groups['kibana'][0] }}"
+
+# Valid settings; each case changes some of them (case.yml).
+test_version: "{{ (lookup('ansible.builtin.file', test_role ~ '/defaults/main.yml') | from_yaml).kibana_version }}"
+test_token: molecule-preflight-token-AAEAAWVsYXN0aWM
+test_password: molecule-preflight-password
+test_key: molecule-preflight-key-0123456789abcdef
+test_other_key: molecule-preflight-other-key-0123456789
+test_short_key: tooshort-secret
+# No failure may print one of these
+test_secrets:
+  - "{{ test_token }}"
+  - "{{ test_password }}"
+  - "{{ test_key }}"
+  - "{{ test_other_key }}"
+  - "{{ test_short_key }}"
+
+# Preflight only checks that the files are named; nothing reads them.
+test_ssl_certificates:
+  - name: "{{ inventory_hostname }}"
+    certificate:
+      path: /etc/pki/molecule/kibana.crt
+    key:
+      path: /etc/pki/molecule/kibana.key
+    ca:
+      path: /etc/pki/molecule/ca.crt

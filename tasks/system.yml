@@ -19,7 +19,7 @@
 - name: System | Reload systemd
   ansible.builtin.systemd_service:
     daemon_reload: true
-  when: _kb_systemd_override is changed
+  when: _kb_systemd_override is changed  # noqa: no-handler - the unit has to be reloaded before it is started below
 
 # Read by the packaged unit (EnvironmentFile=-/etc/sysconfig/kibana)
 - name: System | Configure service environment
@@ -50,7 +50,7 @@
   when: _kb_systemd_override is changed or _kb_sysconfig is changed or _kb_node_options is changed
 
 - name: System | Check whether firewalld is running
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module - only reads the state, which must not fail when the unit is absent
     cmd: systemctl is-active firewalld
   register: _kb_firewalld_state
   changed_when: false

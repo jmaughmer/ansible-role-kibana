@@ -1,0 +1,25 @@
+---
+# Shared by every scenario that installs Kibana (inventory links in each
+# molecule.yml): one Elasticsearch node in the group "elasticsearch", and the
+# Kibana instances in "kibana".
+
+test_role_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+# The role's own kibana_version. Elasticsearch is installed at that version and
+# verify.yml expects Kibana to end up at it, so the tests follow the default.
+test_default_version: "{{ (lookup('ansible.builtin.file', test_role_dir ~ '/defaults/main.yml') | from_yaml).kibana_version }}"
+
+test_es_host: "{{ groups['elasticsearch'] | first }}"
+# By address rather than by name: the containers are not guaranteed to resolve
+# each other's names. The Elasticsearch certificate carries the address.
+test_es_address: "{{ hostvars[test_es_host].ansible_facts.default_ipv4.address }}"
+
+# Written on the controller by prepare.yml: the test CA, each host's certificate
+# and key (also encrypted with test_key_passphrase), and the service account
+# token created on the Elasticsearch node.
+test_pki_dir: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/pki"
+test_key_passphrase: molecule-key-passphrase
+
+# Superuser in Elasticsearch's file realm. Used by prepare.yml and verify.yml,
+# and as the admin user that sets kibana_system's password (basic scenario).
+test_admin_user: molecule_admin
+test_admin_password: molecule-admin-password

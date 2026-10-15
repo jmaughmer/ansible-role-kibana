@@ -1,0 +1,199 @@
+---
+# Shared by every scenario that installs Kibana. What it expects follows the
+# inventory: the authentication method, and whether the key has a passphrase.
+- name: Gather facts from every host
+  hosts: all
+  gather_facts: true
+  tasks: []
+
+- name: Verify the installation and configuration
+  hosts: kibana
+  become: true
+  gather_facts: false
+  vars:
+    test_ssl_entry: "{{ ssl_certificates | selectattr('name', 'equalto', inventory_hostname) | first }}"
+    test_basic: "{{ kibana_elasticsearch_auth == 'basic' }}"
+    test_expected_keystore: >-
+      {{ (['elasticsearch.password'] if test_basic | bool else ['elasticsearch.serviceAccountToken'])
+         + ['xpack.encryptedSavedObjects.encryptionKey', 'xpack.reporting.encryptionKey', 'xpack.security.encryptionKey']
+         + (['server.ssl.keyPassphrase'] if test_ssl_entry.key.passphrase is defined else []) }}
+    # None of these may appear in kibana.yml
+    test_secrets: >-
+      {{ [kibana_security_encryption_key, kibana_encrypted_saved_objects_encryption_key, kibana_reporting_encryption_key]
+         + ([kibana_elasticsearch_password] if test_basic | bool else [kibana_elasticsearch_service_account_token])
+         + ([test_ssl_entry.key.passphrase] if test_ssl_entry.key.passphrase is defined else []) }}
+  tasks:
+    - name: Read the service state
+      ansible.builtin.service_facts:
+
+    - name: Check Kibana is running and enabled
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['kibana.service'].state == 'running'
+          - ansible_facts.services['kibana.service'].status == 'enabled'
+
+    - name: Read the installed version
+      ansible.builtin.command: rpm -q --queryformat '%{VERSION}' kibana  # noqa: command-instead-of-module - reads one package's version
+      register: test_rpm
+      changed_when: false
+
+    - name: Check the installed version is the role's default
+      ansible.builtin.assert:
+        that:
+          - test_rpm.stdout == test_default_version
+        fail_msg: "Kibana {{ test_rpm.stdout }} is installed, expected {{ test_default_version }}"
+
+    - name: Check ownership and permissions
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      register: test_stat
+      failed_when: >-
+        not test_stat.stat.exists
+        or test_stat.stat.mode != item.mode
+        or test_stat.stat.pw_name != 'root'
+        or test_stat.stat.gr_name != item.group
+      loop:
+        - {path: /etc/kibana/kibana.yml, mode: "0660", group: kibana}
+        - {path: /etc/kibana/kibana.keystore, mode: "0660", group: kibana}
+        - {path: /etc/kibana/.ansible-keystore-state.json, mode: "0600", group: root}
+        - {path: /etc/kibana/node.options, mode: "0660", group: kibana}
+        - {path: /etc/kibana/certs, mode: "0750", group: kibana}
+        - {path: /etc/kibana/certs/kibana.crt, mode: "0644", group: kibana}
+        - {path: /etc/kibana/certs/kibana.key, mode: "0640", group: kibana}
+        - {path: /etc/kibana/certs/ca.crt, mode: "0644", group: kibana}
+        - {path: /etc/kibana/certs/elasticsearch-ca.crt, mode: "0644", group: kibana}
+        - {path: /etc/sysconfig/kibana, mode: "0600", group: root}
+        - {path: /etc/systemd/system/kibana.service.d/override.conf, mode: "0644", group: root}
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Read kibana.yml
+      ansible.builtin.slurp:
+        src: /etc/kibana/kibana.yml
+      register: test_kibana_yml
+
+    - name: Check kibana.yml
+      vars:
+        test_raw: "{{ test_kibana_yml.content | b64decode }}"
+        test_settings: "{{ test_raw | from_yaml }}"
+      ansible.builtin.assert:
+        that:
+          - test_settings['server.ssl.enabled'] is true
+          - test_settings['server.ssl.certificate'] == '/etc/kibana/certs/kibana.crt'
+          - test_settings['server.ssl.key'] == '/etc/kibana/certs/kibana.key'
+          - test_settings['server.publicBaseUrl'] == 'https://' ~ inventory_hostname ~ ':5601'
+          - test_settings['elasticsearch.hosts'] == ['https://' ~ test_es_address ~ ':9200']
+          - test_settings['elasticsearch.ssl.certificateAuthorities'] == ['/etc/kibana/certs/elasticsearch-ca.crt']
+          - test_settings['node.roles'] == ['background_tasks', 'ui']
+          - test_settings['xpack.security.secureCookies'] is true
+          - test_settings['elasticsearch.username'] | default('') == ('kibana_system' if test_basic | bool else '')
+          - "'server.maxPayload' not in test_settings"
+          - test_secrets | select('in', test_raw) | list | length == 0
+        fail_msg: "Unexpected kibana.yml on {{ inventory_hostname }}:\n{{ test_raw }}"
+
+    - name: List the keystore entries
+      ansible.builtin.command: /usr/share/kibana/bin/kibana-keystore list
+      environment:
+        KBN_PATH_CONF: /etc/kibana
+      register: test_keystore
+      changed_when: false
+
+    - name: Check the keystore holds exactly the managed entries
+      ansible.builtin.assert:
+        that:
+          - test_keystore.stdout_lines | map('trim') | select | sort == test_expected_keystore | sort
+        fail_msg: "Keystore entries: {{ test_keystore.stdout_lines }}, expected {{ test_expected_keystore | sort }}"
+
+    - name: Read the service settings
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: test_service_files
+      loop:
+        - /etc/kibana/node.options
+        - /etc/systemd/system/kibana.service.d/override.conf
+        - /etc/sysconfig/kibana
+
+    - name: Check the heap size, file limit and environment
+      ansible.builtin.assert:
+        that:
+          - test_service_files.results[0].content | b64decode is search('^--max-old-space-size=1024$', multiline=True)
+          - test_service_files.results[1].content | b64decode is search('^LimitNOFILE=65535$', multiline=True)
+          - test_service_files.results[2].content | b64decode is search('^KBN_PATH_CONF="/etc/kibana"$', multiline=True)
+
+    - name: Check the server key is encrypted exactly when it has a passphrase
+      ansible.builtin.command: grep -q 'BEGIN ENCRYPTED PRIVATE KEY' /etc/kibana/certs/kibana.key
+      register: test_encrypted
+      changed_when: false
+      failed_when: (test_encrypted.rc == 0) != (test_ssl_entry.key.passphrase is defined)
+
+    # Through the server certificate (checked against the test CA), as a user
+    # would; the status shows Kibana's own connection to Elasticsearch.
+    - name: Wait for Kibana to report itself available
+      ansible.builtin.uri:
+        url: "https://{{ inventory_hostname }}:5601/api/status"
+        url_username: "{{ test_admin_user }}"
+        url_password: "{{ test_admin_password }}"
+        force_basic_auth: true
+        ca_path: /etc/kibana/certs/ca.crt
+        status_code: [200, 503]
+      register: test_status
+      until: >-
+        test_status.status == 200
+        and test_status.json.status.overall.level == 'available'
+      retries: 36
+      delay: 5
+
+    - name: Check the version and the Elasticsearch connection
+      ansible.builtin.assert:
+        that:
+          - test_status.json.version.number == test_default_version
+          - test_status.json.status.core.elasticsearch.level == 'available'
+          - test_status.json.status.core.savedObjects.level == 'available'
+
+    - name: Check kibana_system can authenticate to Elasticsearch
+      ansible.builtin.uri:
+        url: "https://{{ test_es_address }}:9200/_security/_authenticate"
+        url_username: kibana_system
+        url_password: "{{ kibana_elasticsearch_password }}"
+        force_basic_auth: true
+        ca_path: /etc/kibana/certs/elasticsearch-ca.crt
+      register: test_authenticate
+      failed_when: test_authenticate.json.username | default('') != 'kibana_system'
+      when: test_basic | bool
+
+# The encryption keys are the same on every instance, so a session cookie
+# issued by one instance is accepted by the others.
+- name: Verify a session from one instance works on every instance
+  hosts: kibana
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Log in on the first instance
+      ansible.builtin.uri:
+        url: https://localhost:5601/internal/security/login
+        method: POST
+        headers:
+          kbn-xsrf: molecule
+          x-elastic-internal-origin: Kibana
+        body_format: json
+        body:
+          providerType: basic
+          providerName: basic
+          currentURL: https://localhost:5601/login
+          params:
+            username: "{{ test_admin_user }}"
+            password: "{{ test_admin_password }}"
+        ca_path: /etc/kibana/certs/ca.crt
+      register: test_login
+      failed_when: test_login.status != 200 or test_login.cookies.sid is not defined
+      run_once: true
+
+    - name: Use the session on each instance
+      ansible.builtin.uri:
+        url: https://localhost:5601/internal/security/me
+        headers:
+          Cookie: "sid={{ test_login.cookies.sid }}"
+          x-elastic-internal-origin: Kibana
+        ca_path: /etc/kibana/certs/ca.crt
+      register: test_me
+      failed_when: test_me.status != 200 or test_me.json.username | default('') != test_admin_user

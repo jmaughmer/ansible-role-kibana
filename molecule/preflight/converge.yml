@@ -1,0 +1,200 @@
+---
+# Each case runs the role's facts and preflight tasks (nothing is installed)
+# and states which check must refuse it, on which hosts, and how:
+#   task     name of the preflight task that must fail, without its
+#            "Preflight | " prefix; empty means every check must pass
+#   expect   regex the failure message has to match (checks marked no_log
+#            hide their message, so those cases name only the task)
+#   fail_on  hosts that must fail (default: every host)
+#   run_once true for a check that runs once for all hosts: every host must
+#            fail, but only the first knows which task failed and why
+# Every failure is also checked for the secrets in vars/shared.yml, which must
+# never be printed.
+#
+# Each case is a play of its own. Some checks compare the hosts with each
+# other, so both hosts have to run the case together; a play guarantees that,
+# a looped include does not once one host has failed and the other not.
+
+- name: Valid settings pass
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: valid settings pass
+      task: ""
+
+- name: Unsupported distribution
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: distribution not in kibana_supported_distributions
+      distributions: [RedHat]
+      task: Verify operating system is supported
+      expect: Unsupported platform
+
+- name: Host outside kibana_group
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: host outside kibana_group
+      group: other
+      fail_on: "{{ groups['kibana'] | difference(groups['other']) }}"
+      task: Verify host is a member of the Kibana group
+      expect: is not in inventory group 'other'
+
+- name: Version that is not exact
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: version without a patch number
+      version: "9.5"
+      task: Verify Kibana version
+      expect: must be an exact 9.x.y release
+
+- name: Another major version
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: an 8.x release
+      version: "8.19.3"
+      task: Verify Kibana version
+      expect: must be an exact 9.x.y release
+
+- name: Unknown package source
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: unknown kibana_repo_source
+      repo_source: local
+      task: Verify package source settings
+      expect: kibana_repo_source must be elastic, satellite or none
+
+- name: Satellite without a repository id
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: satellite without kibana_satellite_repo_id
+      repo_source: satellite
+      task: Verify package source settings
+      expect: Satellite needs kibana_satellite_repo_id
+
+- name: Unknown node role
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: unknown node role
+      node_roles: [data]
+      task: Verify node roles and tuning values
+      expect: kibana_node_roles must be a non-empty subset
+
+- name: Heap size with a unit
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: heap size with a unit
+      heap: 1g
+      task: Verify node roles and tuning values
+      expect: kibana_max_old_space_size_mb must be a number of MB
+
+- name: No Elasticsearch hosts
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: no Elasticsearch hosts
+      es_hosts: []
+      task: Verify node roles and tuning values
+      expect: kibana_elasticsearch_hosts must not be empty
+
+- name: Missing service account token
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: service_account_token without a token
+      token: ""
+      task: Verify Elasticsearch credentials are configured
+
+- name: Basic auth as elastic
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: basic auth as the elastic superuser
+      auth: basic
+      username: elastic
+      password: "{{ test_password }}"
+      task: Verify Elasticsearch credentials are configured
+
+- name: Managed password without admin credentials
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: kibana_elasticsearch_manage_password without an admin password
+      auth: basic
+      password: "{{ test_password }}"
+      manage_password: true
+      task: Verify Elasticsearch credentials are configured
+
+- name: Short encryption key
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: security encryption key shorter than 32 characters
+      security_key: "{{ test_short_key }}"
+      task: Verify encryption keys
+
+- name: Short reporting key
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: reporting encryption key shorter than 32 characters
+      reporting_key: "{{ test_short_key }}"
+      task: Verify encryption keys
+
+- name: Encryption keys that differ
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: encryption keys that differ between instances
+      security_key: "{{ test_key if inventory_hostname == test_first else test_other_key }}"
+      run_once: true
+      task: Verify encryption keys are identical on every instance
+      expect: Encryption keys differ between Kibana instances
+
+- name: Firewall port without a protocol
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: firewall port without a protocol
+      firewall_ports: ["5602"]
+      task: Verify firewall settings
+      expect: kibana_firewall_ports entries must look like
+
+- name: Unknown SELinux setting
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: kibana_selinux_manage that is not auto, true or false
+      selinux_manage: maybe
+      task: Verify hardening settings
+      expect: kibana_selinux_manage must be auto, true or false
+
+- name: No CA for Elasticsearch
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: no CA for Elasticsearch
+      ssl_certificates:
+        - name: "{{ inventory_hostname }}"
+          certificate: {path: /etc/pki/molecule/kibana.crt}
+          key: {path: /etc/pki/molecule/kibana.key}
+      task: Verify TLS material
+
+- name: No server certificate
+  ansible.builtin.import_playbook: case.yml
+  vars:
+    test_case:
+      name: server TLS without a certificate entry for the host
+      ssl_certificates:
+        - name: some-other-host
+          certificate: {path: /etc/pki/molecule/kibana.crt}
+          key: {path: /etc/pki/molecule/kibana.key}
+          ca: {path: /etc/pki/molecule/ca.crt}
+      task: Verify TLS material

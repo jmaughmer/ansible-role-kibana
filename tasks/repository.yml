@@ -78,6 +78,7 @@
       ansible.builtin.command:
         cmd: subscription-manager refresh
       register: _kb_sat_refresh
+      changed_when: true
       until: _kb_sat_refresh is not failed
       retries: "{{ kibana_task_retries }}"
       delay: "{{ kibana_task_delay }}"
@@ -95,7 +96,7 @@
       delay: "{{ kibana_task_delay }}"
       changed_when: false
       check_mode: false
-      when: _kb_sat_refresh is changed
+      when: _kb_sat_refresh is changed  # noqa: no-handler - the lookup is needed by the next task
 
     - name: Repository | Record Satellite repository state
       ansible.builtin.set_fact:
