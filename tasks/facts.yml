@@ -8,10 +8,14 @@
   delay: "{{ kibana_task_delay }}"
   when: ansible_facts['os_family'] is not defined
 
+# dpkg-query prints the selection and state too: '<want> ok installed <version>'
+# for an installed package, 'deinstall ok config-files <version>' once removed.
 - name: Facts | Query installed Kibana package version
   ansible.builtin.command:  # noqa: command-instead-of-module - package_facts reads every package; this needs one
-    cmd: rpm -q --queryformat '%{VERSION}' kibana
-  register: _kb_rpm_query
+    cmd: >-
+      {{ "dpkg-query -W -f='${Status} ${Version}' kibana" if ansible_facts['os_family'] == 'Debian'
+         else "rpm -q --queryformat '%{VERSION}' kibana" }}
+  register: _kb_pkg_query
   changed_when: false
   failed_when: false
   check_mode: false
@@ -26,7 +30,12 @@
 
 - name: Facts | Set Kibana facts
   ansible.builtin.set_fact:
-    _kb_installed_version: "{{ (_kb_rpm_query.stdout | trim) if _kb_rpm_query.rc == 0 else '' }}"
+    _kb_pkg_mgr: "{{ 'apt' if ansible_facts['os_family'] == 'Debian' else 'dnf' }}"
+    _kb_installed_version: >-
+      {{ '' if _kb_pkg_query.rc != 0
+         else (_kb_pkg_query.stdout | trim) if ansible_facts['os_family'] != 'Debian'
+         else (_kb_pkg_query.stdout.split() | last) if ' ok installed ' in _kb_pkg_query.stdout
+         else '' }}
     _kb_is_running: "{{ (_kb_service_state.stdout | trim) == 'active' }}"
     _kb_target_version: "{{ kibana_version }}"
     _kb_status_url_fact: "{{ _kb_status_url }}"

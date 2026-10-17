@@ -8,6 +8,13 @@ _kb_package_repos: >-
   {{ [_kb_repo_name] if kibana_repo_source == 'elastic'
      else ([kibana_satellite_repo_id] if kibana_repo_source == 'satellite' else []) }}
 _kb_python: "{{ ansible_facts['python']['executable'] | default('/usr/bin/python3') }}"
+# apt source on Ubuntu. The elasticsearch, kibana, logstash and elastic_fleet roles
+# write the same key and source, so a host running several of them ends up with one
+# definition (apt refuses two definitions of one URI with different keys).
+_kb_apt_keyring: /etc/apt/keyrings/elastic.asc
+_kb_apt_source: "/etc/apt/sources.list.d/elastic-{{ _kb_major_version }}.x.sources"
+# Environment file the packaged unit reads
+_kb_sysconfig_file: "{{ '/etc/default/kibana' if ansible_facts['os_family'] == 'Debian' else '/etc/sysconfig/kibana' }}"
 _kb_keystore_path: "{{ kibana_conf_dir }}/kibana.keystore"
 _kb_keystore_state_file: "{{ kibana_conf_dir }}/.ansible-keystore-state.json"
 # The package CLIs locate the configuration directory through this variable.
@@ -92,3 +99,6 @@ _kb_deployment_upgrade: >-
 _kb_es_auth_headers: >-
   {{ {'Authorization': 'Bearer ' ~ kibana_elasticsearch_service_account_token}
      if kibana_elasticsearch_auth == 'service_account_token' else {} }}
+
+# ufw (Ubuntu's firewall) is active
+_kb_ufw_active: "{{ (_kb_ufw_state.stdout | default('')) is search('^Status: active', multiline=True) }}"

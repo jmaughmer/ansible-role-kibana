@@ -10,7 +10,7 @@
 #
 # Package downloads run as async jobs so a dropped SSH session does not abort
 # them, and are retried if the download itself fails.
-- name: Install | Install Kibana package
+- name: Install | Install Kibana package (dnf)
   ansible.builtin.dnf:
     name: "kibana-{{ kibana_version }}"
     state: present
@@ -22,9 +22,38 @@
   until: _kb_package_install is not failed
   retries: "{{ kibana_task_retries }}"
   delay: "{{ kibana_task_delay }}"
-  when: _kb_installed_version | length == 0
+  when:
+    - _kb_pkg_mgr == 'dnf'
+    - _kb_installed_version | length == 0
 
-- name: Install | Install extra packages
+- name: Install | Install Kibana package (apt)
+  ansible.builtin.apt:
+    name: "kibana={{ kibana_version }}"
+    state: present
+    allow_change_held_packages: true
+    cache_valid_time: 3600
+    lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+  async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
+  poll: "{{ kibana_download_async_poll }}"
+  register: _kb_package_install_apt
+  until: _kb_package_install_apt is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  when:
+    - _kb_pkg_mgr == 'apt'
+    - _kb_installed_version | length == 0
+
+# The apt counterpart of the disabled dnf repository: `apt upgrade` skips a held
+# package, so only the role (upgrade.yml) changes the version.
+- name: Install | Hold the Kibana package
+  ansible.builtin.dpkg_selections:
+    name: kibana
+    selection: hold
+  when:
+    - _kb_pkg_mgr == 'apt'
+    - not ansible_check_mode or _kb_installed_version | length > 0
+
+- name: Install | Install extra packages (dnf)
   ansible.builtin.dnf:
     name: "{{ kibana_extra_packages }}"
     state: present
@@ -35,4 +64,22 @@
   until: _kb_extra_packages is not failed
   retries: "{{ kibana_task_retries }}"
   delay: "{{ kibana_task_delay }}"
-  when: kibana_extra_packages | length > 0
+  when:
+    - _kb_pkg_mgr == 'dnf'
+    - kibana_extra_packages | length > 0
+
+- name: Install | Install extra packages (apt)
+  ansible.builtin.apt:
+    name: "{{ kibana_extra_packages }}"
+    state: present
+    cache_valid_time: 3600
+    lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+  async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
+  poll: "{{ kibana_download_async_poll }}"
+  register: _kb_extra_packages_apt
+  until: _kb_extra_packages_apt is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  when:
+    - _kb_pkg_mgr == 'apt'
+    - kibana_extra_packages | length > 0

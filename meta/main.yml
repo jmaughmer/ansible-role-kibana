@@ -4,7 +4,7 @@ galaxy_info:
   namespace: jmaughmer
   author: Justin Maughmer
   description: >-
-    Install and configure Kibana 9.x on RHEL, AlmaLinux and Rocky Linux 9/10 with TLS,
+    Install and configure Kibana 9.x on RHEL, AlmaLinux and Rocky Linux 9/10 and Ubuntu 24.04/26.04 with TLS,
     Elasticsearch service account auth, rolling restarts and coordinated upgrades
   license: MIT
   min_ansible_version: "2.15"
@@ -14,6 +14,10 @@ galaxy_info:
       versions:
         - "9"
         - "10"
+    - name: Ubuntu
+      versions:
+        - noble     # 24.04
+        - resolute  # 26.04
   galaxy_tags:
     - kibana
     - elastic

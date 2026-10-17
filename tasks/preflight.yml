@@ -4,13 +4,15 @@
     that:
       - kibana_supported_distributions is sequence
       - kibana_supported_distributions is not string
-      - ansible_facts['os_family'] == 'RedHat'
       - ansible_facts['distribution'] in kibana_supported_distributions
-      - ansible_facts['distribution_major_version'] in ['9', '10']
+      - >-
+        (ansible_facts['os_family'] == 'RedHat' and ansible_facts['distribution_major_version'] in ['9', '10'])
+        or (ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_version'] in ['24.04', '26.04'])
     fail_msg: >-
       Unsupported platform {{ ansible_facts['distribution'] }}
-      {{ ansible_facts['distribution_version'] }}. Supported: major version 9 or 10 of
-      {{ kibana_supported_distributions | join(', ') }} (kibana_supported_distributions).
+      {{ ansible_facts['distribution_version'] }}. Supported: Enterprise Linux 9 or 10 and Ubuntu
+      24.04 or 26.04, from {{ kibana_supported_distributions | join(', ') }}
+      (kibana_supported_distributions).
     quiet: true
 
 - name: Preflight | Verify the play is not serialized
@@ -50,9 +52,10 @@
       - kibana_satellite_repo_state in ['unmanaged', 'enabled', 'disabled']
       - kibana_satellite_repo_overrides is mapping
       - kibana_satellite_repo_overrides.keys() | map('lower') | intersect(['enabled', 'baseurl', 'name']) | length == 0
+      - kibana_repo_source != 'satellite' or ansible_facts['os_family'] == 'RedHat'
     fail_msg: >-
       kibana_repo_source must be elastic, satellite or none (kibana_manage_repo was replaced:
-      use kibana_repo_source: none instead of false). Satellite needs kibana_satellite_repo_id;
+      use kibana_repo_source: none instead of false). Satellite is for Enterprise Linux hosts only and needs kibana_satellite_repo_id;
       kibana_satellite_repo_state must be unmanaged, enabled or disabled; and
       kibana_satellite_repo_overrides cannot set enabled (use the state setting), baseurl or name.
     quiet: true

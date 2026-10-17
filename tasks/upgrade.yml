@@ -40,7 +40,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Upgrade | Upgrade Kibana package
+    - name: Upgrade | Upgrade Kibana package (dnf)
       ansible.builtin.dnf:
         name: "kibana-{{ hostvars[item]._kb_target_version }}"
         state: present
@@ -48,13 +48,37 @@
         lock_timeout: "{{ kibana_dnf_lock_timeout }}"
         enablerepo: "{{ _kb_package_repos if _kb_package_repos | length > 0 else omit }}"
       delegate_to: "{{ item }}"
-      loop: "{{ _kb_upgrade_hosts }}"
+      loop: "{{ _kb_upgrade_hosts | map('extract', hostvars) | selectattr('_kb_pkg_mgr', 'equalto', 'dnf') | map(attribute='inventory_hostname') | list }}"
       async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
       poll: "{{ kibana_download_async_poll }}"
       register: _kb_upgrade_package
       until: _kb_upgrade_package is not failed
       retries: "{{ kibana_task_retries }}"
       delay: "{{ kibana_task_delay }}"
+
+    - name: Upgrade | Upgrade Kibana package (apt)
+      ansible.builtin.apt:
+        name: "kibana={{ hostvars[item]._kb_target_version }}"
+        state: present
+        allow_change_held_packages: true
+        allow_downgrade: false
+        cache_valid_time: 3600
+        lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+      delegate_to: "{{ item }}"
+      loop: "{{ _kb_upgrade_hosts | map('extract', hostvars) | selectattr('_kb_pkg_mgr', 'equalto', 'apt') | map(attribute='inventory_hostname') | list }}"
+      async: "{{ 0 if ansible_check_mode else kibana_download_async_timeout }}"
+      poll: "{{ kibana_download_async_poll }}"
+      register: _kb_upgrade_package_apt
+      until: _kb_upgrade_package_apt is not failed
+      retries: "{{ kibana_task_retries }}"
+      delay: "{{ kibana_task_delay }}"
+
+    - name: Upgrade | Hold the upgraded Kibana package
+      ansible.builtin.dpkg_selections:
+        name: kibana
+        selection: hold
+      delegate_to: "{{ item }}"
+      loop: "{{ _kb_upgrade_hosts | map('extract', hostvars) | selectattr('_kb_pkg_mgr', 'equalto', 'apt') | map(attribute='inventory_hostname') | list }}"
 
     # The package upgrade hands the configuration directory to the kibana
     # group, including the role's checksum file, which stays root's own.

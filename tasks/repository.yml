@@ -4,7 +4,9 @@
 
 # ------------------------------------------------------------------ elastic
 - name: Repository | Elastic repository
-  when: kibana_repo_source == 'elastic'
+  when:
+    - kibana_repo_source == 'elastic'
+    - _kb_pkg_mgr == 'dnf'
   block:
     - name: Repository | Import Elastic GPG key
       ansible.builtin.rpm_key:
@@ -28,6 +30,62 @@
         timeout: "{{ kibana_repo_timeout }}"
         retries: "{{ kibana_repo_retries }}"
         enabled: false
+
+# -------------------------------------------------------------- elastic, apt
+# apt has no per-command repository switch, so the source stays enabled and the
+# package is held instead (install.yml), which keeps `apt upgrade` away from it.
+- name: Repository | Elastic apt repository
+  when:
+    - kibana_repo_source == 'elastic'
+    - _kb_pkg_mgr == 'apt'
+  block:
+    - name: Repository | Create the apt keyring directory
+      ansible.builtin.file:
+        path: "{{ _kb_apt_keyring | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: kibana_repo_gpgcheck | bool
+
+    # Downloaded once; delete the file to fetch a rotated key.
+    - name: Repository | Download Elastic GPG key
+      ansible.builtin.get_url:
+        url: "{{ kibana_repo_gpgkey }}"
+        dest: "{{ _kb_apt_keyring }}"
+        force: false
+        owner: root
+        group: root
+        mode: "0644"
+      register: _kb_apt_key
+      until: _kb_apt_key is not failed
+      retries: "{{ kibana_task_retries }}"
+      delay: "{{ kibana_task_delay }}"
+      when: kibana_repo_gpgcheck | bool
+
+    - name: Repository | Configure Elastic apt source
+      ansible.builtin.copy:
+        dest: "{{ _kb_apt_source }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: {{ kibana_repo_baseurl }}
+          Suites: stable
+          Components: main
+          {{ ('Signed-By: ' ~ _kb_apt_keyring) if kibana_repo_gpgcheck | bool else 'Trusted: yes' }}
+      register: _kb_apt_source_file
+
+    - name: Repository | Update the apt package index
+      ansible.builtin.apt:
+        update_cache: true
+        lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+      register: _kb_apt_update
+      until: _kb_apt_update is not failed
+      retries: "{{ kibana_task_retries }}"
+      delay: "{{ kibana_task_delay }}"
+      when: _kb_apt_source_file is changed or _kb_apt_key is changed
 
 # ---------------------------------------------------------------- satellite
 # The repository comes from Red Hat Satellite / Katello through
