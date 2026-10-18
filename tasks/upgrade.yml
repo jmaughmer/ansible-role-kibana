@@ -91,6 +91,22 @@
       delegate_to: "{{ item }}"
       loop: "{{ _kb_upgrade_hosts }}"
 
+    # The new package's files are new to fapolicyd, which would not let
+    # Kibana load them.
+    - name: Upgrade | Refresh fapolicyd trust on upgraded hosts
+      ansible.builtin.include_tasks:
+        file: fapolicyd_refresh.yml
+        apply:
+          tags: [kibana, kibana_service]
+      vars:
+        _kb_fapolicyd_host: "{{ _kb_trust_host }}"
+      loop: >-
+        {{ _kb_upgrade_hosts | select('in', ansible_play_hosts | map('extract', hostvars)
+             | selectattr('_kb_fapolicyd_trust', 'defined') | selectattr('_kb_fapolicyd_trust')
+             | map(attribute='inventory_hostname') | list) | list }}
+      loop_control:
+        loop_var: _kb_trust_host
+
     - name: Upgrade | Start the migration instance
       ansible.builtin.systemd_service:
         name: kibana

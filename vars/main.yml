@@ -81,6 +81,29 @@ _kb_selinux_fcontexts: >-
                if (kibana_log_file | dirname) != '/var/log/kibana' else {})
      | combine(kibana_selinux_fcontexts) }}
 
+_kb_fapolicyd_trust_file: "/etc/fapolicyd/trust.d/{{ kibana_fapolicyd_trust_file }}"
+# What the entries were written for, so a role change that trusts more gets
+# them rewritten. fapolicyd reads nothing else in /etc/fapolicyd.
+_kb_fapolicyd_state_file: "/etc/fapolicyd/{{ kibana_fapolicyd_trust_file }}.ansible.json"
+# Files under kibana_home that the package installed but the default
+# fapolicyd-filter.conf leaves out of the rpm trust, which covers *.js but
+# not Node.js's other module extensions: CommonJS (.cjs) and ES (.mjs)
+# modules; files Kibana reads that fapolicyd takes for code by their content
+# (gRPC's .proto definitions, the AI agents' SKILL.md files); and the
+# headless browser reporting starts, with its libraries.
+_kb_fapolicyd_rpm_patterns: ["*.cjs", "*.mjs", "*.proto", SKILL.md, "*.so", "*.so.*", headless_shell]
+# The installed package, see fapolicyd.yml
+_kb_fapolicyd_fingerprint_argv:
+  - /bin/bash
+  - -c
+  - set -o pipefail; { rpm -q kibana 2>/dev/null || dpkg-query -W kibana; } | sha256sum | cut -d ' ' -f 1
+_kb_fapolicyd_spec: >-
+  {{ {'home': kibana_home, 'paths': kibana_fapolicyd_trust_paths, 'patterns': _kb_fapolicyd_rpm_patterns} }}
+_kb_fapolicyd_manage: >-
+  {{ (kibana_fapolicyd_trust | string | lower) in ['true', 'yes']
+     or ((kibana_fapolicyd_trust | string | lower) == 'auto'
+         and (_kb_fapolicyd_state.stdout | default('') | trim) == 'active') }}
+
 # ---------------------------------------------------------------------------
 # Readiness / API access
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ What it does:
 - Checks that encryption keys are identical on every instance.
 - Sets node roles (`ui`, `background_tasks`) and the Node.js heap per host.
 - Restarts instances in batches of limited size when configuration changes, and upgrades them in a coordinated way when the version changes.
+- Trusts the package's files that fapolicyd's default filter leaves out, on hosts running fapolicyd.
 - Works over high-latency, low-bandwidth links such as satellite. See [Slow and unreliable networks](#slow-and-unreliable-networks).
 
 ## Requirements
@@ -21,7 +22,7 @@ What it does:
   ansible-galaxy collection install -r requirements.yml
   ```
 
-- **Target hosts:** RHEL, AlmaLinux or Rocky Linux 9 or 10, or Ubuntu 24.04 or 26.04 (see [Supported platforms](#supported-platforms)), with `openssl` installed. On STIG-hardened hosts see [Hardened hosts](#hardened-hosts-fips-selinux-fapolicyd) — fapolicyd has to allow Ansible before anything runs. They need a package source: Elastic's repository (`artifacts.elastic.co`) or a mirror, or (Enterprise Linux only) a Red Hat Satellite or Katello server. See [Package source](#package-source).
+- **Target hosts:** RHEL, AlmaLinux or Rocky Linux 9 or 10, or Ubuntu 24.04 or 26.04 (see [Supported platforms](#supported-platforms)), with `openssl` installed. On STIG-hardened hosts see [Hardened hosts](#hardened-hosts-fips-selinux-fapolicyd). They need a package source: Elastic's repository (`artifacts.elastic.co`) or a mirror, or (Enterprise Linux only) a Red Hat Satellite or Katello server. See [Package source](#package-source).
 - **Elasticsearch 9.x** at the same or a newer minor version than Kibana, reachable from the Kibana hosts. For example, one deployed with [ansible-role-elasticsearch](https://github.com/jmaughmer/ansible-role-elasticsearch).
 
 ## Supported platforms
@@ -367,34 +368,68 @@ The role is meant to run on hosts with the DISA STIG applied. What that takes:
 
 ### fapolicyd
 
-**Ansible itself has to be allowed first.** fapolicyd blocks whatever it does not trust, and that
-includes the Python module Ansible copies to the host for *every* task. Nothing runs until that is
-allowed, so add a rule once, before using these roles:
+**Ansible needs no rule of its own.** Ansible runs every task through a Python file it copies to the
+host, and fapolicyd denies Python files it does not trust. But its default rules include
+`allow perm=any uid=0 trust=1 : all`, which lets root's trusted programs open anything, and these
+roles run as root (`become`), so Ansible and the `repo_lookup.py` helper used in Satellite mode work
+unchanged; this was tested with fapolicyd enforcing on AlmaLinux 10. Only modules run as an
+unprivileged user are denied (`AnsiballZ_*.py`), unless SSH pipelining is on, which hands them to
+Python on its standard input. Where that rule has been removed, allow Ansible's Python to open files
+in its temporary directory (`~/.ansible/tmp` of the user Ansible connects as). Denials are audited,
+so `ausearch -m fanotify -ts recent` shows what was blocked.
 
-```
-# /etc/fapolicyd/rules.d/30-ansible.rules
-allow perm=open exe=/usr/bin/python3.9 : dir=/root/.ansible/tmp/
-```
+**fapolicyd only sees Kibana when it watches whole filesystems.** The package's unit sets
+`PrivateTmp=yes`, which runs Kibana in a mount namespace of its own. With its default
+`allow_filesystem_mark = 0`, fapolicyd watches individual mounts, and the copies in that namespace
+are not among them, so it neither checks nor denies anything Kibana opens or runs. With
+`allow_filesystem_mark = 1` in `/etc/fapolicyd/fapolicyd.conf` it does, and Kibana then needs the
+entries below to start at all. The role writes them either way, so changing that setting later
+breaks nothing.
 
-Load it with `fagenrules --load`. The file has to sort before the rules that deny untrusted
-interpreted files, and the interpreter and directory have to match the host's Python and the user you
-become (`ansible_remote_tmp`). The same rule covers the `repo_lookup.py` helper these roles run in
-Satellite mode. Denials are audited, so `ausearch -m fanotify -ts recent` shows what was blocked.
+**What rpm installed but fapolicyd does not trust.** The default
+`/etc/fapolicyd/fapolicyd-filter.conf` leaves `usr/share/` out of the rpm trust apart from scripts,
+archives and `bin/` directories. Its `*.js` covers most of Kibana, but not the CommonJS and ES
+modules ending in `.cjs` and `.mjs`, about 3,000 of them in 9.5. As the `kibana` user Node.js cannot
+load them, so Kibana keeps restarting (`EPERM: operation not permitted, open
+'/usr/share/kibana/node_modules/.../util.cjs'`). Nor can reporting start its headless browser for PDF
+and PNG reports. fapolicyd also decides by content what counts as code, and takes a few data files
+for it: gRPC's `.proto` definitions and the AI agents' `SKILL.md` files. The role trusts all of these
+under `kibana_home`, plus the browser (`headless_shell`) and the shared libraries next to it, about
+3,070 files in 9.5, which takes about a minute:
 
-Beyond that, Kibana needs nothing: everything it runs comes from the rpm, so the trust database
-already covers it. The role therefore has no fapolicyd settings.
+| Variable | Default | Purpose |
+|---|---|---|
+| `kibana_fapolicyd_trust` | `auto` | `auto` acts only when fapolicyd is running; `true` always; `false` never |
+| `kibana_fapolicyd_trust_paths` | `[]` | More paths to trust, such as plugins installed by hand; directories are added recursively |
+| `kibana_fapolicyd_trust_file` | `ansible-kibana` | File under `/etc/fapolicyd/trust.d/` |
+
+fapolicyd trusts files by path, size and checksum, so the role rewrites the entries, and loads them
+with `fapolicyd-cli --update`, whenever the package changes. That includes an upgrade: the entries
+are rewritten on each host after the new package is installed and before Kibana starts again. Next
+to the trust file, in `/etc/fapolicyd/ansible-kibana.ansible.json`, the role records what the
+entries were written for (the installed package and the paths it trusts), so an upgrade made by
+hand, or a run that stopped before the entries were rewritten, is caught on the next run.
+
+The entries go in a file of their own under `/etc/fapolicyd/trust.d/`, which needs fapolicyd 1.1 or
+newer (RHEL 9 and 10 both ship that). Set `kibana_fapolicyd_trust: false` on anything older and
+manage trust yourself.
 
 ### FIPS mode
 
-Kibana has no FIPS mode. It runs the Node.js build it ships with, which uses its own OpenSSL and
-does not inherit the system policy, and Elastic does not validate it. A host in FIPS mode runs Kibana
-unchanged.
+The role does not turn on Kibana's own FIPS mode. Kibana has one (`xpack.security.fipsMode.enabled`,
+with a Platinum or Enterprise license), but it needs Node.js pointed at a FIPS-configured OpenSSL 3
+provider, which the bundled Node.js is not set up for, and a password-protected `kibana.keystore`,
+which this role does not create (see Elastic's
+[FIPS compliance](https://www.elastic.co/guide/en/kibana/8.19/xpack-security-fips-140-2.html) page).
+Without it Kibana runs the Node.js build it ships with, whose OpenSSL does not follow the system's
+crypto policy, so a host in FIPS mode runs Kibana unchanged.
 
 What matters in practice:
 
 - **The server private key must not be in the traditional encrypted PEM format** (`Proc-Type:
   4,ENCRYPTED`), whose key derivation uses MD5. Preflight fails with that message when the host
-  reports FIPS; convert it with `openssl pkcs8 -topk8 -in old.key -out new.key`, or let
+  reports FIPS; convert it on a machine without FIPS mode with
+  `openssl pkcs8 -topk8 -in old.key -out new.key`, or let
   [ansible-role-elastic-tls](https://github.com/jmaughmer/ansible-role-elastic-tls) issue it.
 - **TLS protocols and ciphers** can be stated explicitly, for evidence:
 
@@ -421,6 +456,7 @@ correctly where the package puts them; moved elsewhere they come out as `default
 ## Notes and caveats
 
 - **Check mode** is not supported for first-time installs, because the keystore CLI needs the Kibana binaries. It works on hosts where Kibana is already installed.
+- **PDF and PNG reports** need the `nss` package, which minimal and cloud images leave out; without it the reporting browser does not launch. Add it to `kibana_extra_packages`.
 
 ## Variables
 
@@ -498,8 +534,13 @@ as `vm.max_map_count` are the VM's own. Overrides for the VMs go in
 [`molecule/kvm-ubuntu2604/`](molecule/kvm-ubuntu2604/) run the same thing on Ubuntu 24.04 and 26.04
 VMs. They only swap the cloud image, and share `molecule/kvm/`'s playbooks and inventory.
 
+[`molecule/kvm-fapolicyd/`](molecule/kvm-fapolicyd/) runs the upgrade scenario on AlmaLinux 10 VMs,
+with fapolicyd enforcing on the Kibana hosts, `allow_filesystem_mark = 1`, and nothing added to its
+rules. It checks that both instances install, upgrade and run with nothing denied, and that the trust
+entries cover the modules and the reporting browser.
+
 ```bash
-for s in kvm kvm-ubuntu2404 kvm-ubuntu2604; do molecule test -s "$s" || break; done
+for s in kvm kvm-ubuntu2404 kvm-ubuntu2604 kvm-fapolicyd; do molecule test -s "$s" || break; done
 ```
 
 The machine running Molecule needs libvirt, `virt-install`, `qemu-img` and `xorriso`, and its user
@@ -521,6 +562,8 @@ scenario, so the three scenarios can also run side by side if the machine has th
 │   ├── package_version_check.yml   # requested version is available before install/upgrade
 │   ├── install.yml
 │   ├── system.yml               # systemd drop-in, sysconfig, node.options heap, firewalld
+│   ├── selinux.yml
+│   ├── fapolicyd.yml / fapolicyd_refresh.yml   # trust entries for what rpm trust leaves out
 │   ├── certificates.yml
 │   ├── elasticsearch_check.yml  # connectivity, credentials, version compatibility
 │   ├── keystore.yml

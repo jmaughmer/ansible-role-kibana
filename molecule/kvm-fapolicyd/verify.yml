@@ -1,0 +1,45 @@
+---
+- name: Verify as in the default scenario
+  ansible.builtin.import_playbook: ../default/verify.yml
+
+- name: Verify fapolicyd let the upgraded instances run
+  hosts: kibana
+  become: true
+  gather_facts: false
+  vars:
+    test_trust_file: /etc/fapolicyd/trust.d/ansible-kibana
+  tasks:
+    - name: Check fapolicyd is still running
+      ansible.builtin.command: systemctl is-active fapolicyd  # noqa: command-instead-of-module - only reads the state
+      changed_when: false
+
+    # Without it the test proves nothing, see prepare.yml
+    - name: Check fapolicyd watches whole filesystems
+      ansible.builtin.command:
+        argv: [grep, -Eq, '^\s*allow_filesystem_mark\s*=\s*1', /etc/fapolicyd/fapolicyd.conf]
+      changed_when: false
+
+    - name: Check the trust entries cover modules and the reporting browser
+      ansible.builtin.command:
+        argv: [grep, -Eq, "{{ item }}", "{{ test_trust_file }}"]
+      loop:
+        - '^/usr/share/kibana/node_modules/[^ ]+[.]cjs '
+        - '^/usr/share/kibana/node_modules/[^ ]+[.]mjs '
+        - '^/usr/share/kibana/node_modules/[^ ]+/headless_shell '
+      changed_when: false
+
+    - name: Read what fapolicyd denied
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          journalctl -u fapolicyd -o cat --no-pager | grep 'dec=deny' | sed -E 's/ pid=[0-9]+//' | sort | uniq -c
+        executable: /bin/bash
+      register: test_denials
+      changed_when: false
+      failed_when: test_denials.rc not in [0, 1]
+
+    - name: Check fapolicyd denied nothing
+      ansible.builtin.assert:
+        that:
+          - test_denials.stdout_lines | length == 0
+        fail_msg: "{{ test_denials.stdout_lines }}"
