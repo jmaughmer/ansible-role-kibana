@@ -1,0 +1,71 @@
+---
+- name: Verify as in the default scenario
+  ansible.builtin.import_playbook: ../default/verify.yml
+
+- name: Verify Kibana runs without an executable /tmp
+  hosts: kibana
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the mount options of /tmp
+      ansible.builtin.command:
+        argv: [findmnt, --noheadings, --output, OPTIONS, --target, /tmp]
+      register: test_tmp_options
+      changed_when: false
+
+    - name: Check /tmp is still noexec
+      ansible.builtin.assert:
+        that:
+          - "'noexec' in test_tmp_options.stdout.split(',')"
+
+    - name: Look for native code that failed to load
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        journalctl --unit kibana --boot --no-pager --output cat
+        | grep -iE 'failed to map segment|noexec|ERR_DLOPEN_FAILED'
+      args:
+        executable: /bin/bash
+      register: test_load_errors
+      changed_when: false
+      failed_when: test_load_errors.rc not in [0, 1]
+
+    - name: Check none did
+      ansible.builtin.assert:
+        that:
+          - test_load_errors.rc == 1
+        fail_msg: "{{ test_load_errors.stdout_lines }}"
+
+    - name: Find Reporting's headless Chromium
+      ansible.builtin.find:
+        paths: /usr/share/kibana
+        patterns: headless_shell
+        file_type: file
+        recurse: true
+      register: test_chromium
+
+    # As Reporting runs it: as kibana, with its profile in the temporary
+    # directory and shared memory in /dev/shm, both noexec here
+    - name: Render a page with it
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - kibana
+          - --
+          - timeout
+          - "120"
+          - "{{ test_chromium.files[0].path }}"
+          - --headless
+          - --no-sandbox
+          - --disable-gpu
+          - --user-data-dir=/tmp/molecule-chromium
+          - --dump-dom
+          - "data:text/html,<p>rendered-under-noexec</p>"
+      register: test_render
+      changed_when: false
+
+    - name: Check the page rendered
+      ansible.builtin.assert:
+        that:
+          - test_render.stdout is search('rendered-under-noexec')
+        fail_msg: "{{ test_render.stderr_lines }}"
