@@ -418,6 +418,13 @@ correctly where the package puts them; moved elsewhere they come out as `default
 - **`semanage` comes from `policycoreutils-python-utils`,** which is required only when the role
   manages contexts.
 
+### noexec /tmp
+
+The STIG mounts `/tmp`, `/var/tmp` and `/dev/shm` with `noexec`. Kibana needs nothing for that:
+Node.js loads its native modules from Kibana's home, and Reporting's headless Chromium runs from there
+too, keeping only its profile and shared memory in `/tmp` and `/dev/shm`. The `kvm-noexec` scenario
+tests both (see [Testing](#testing)).
+
 ## Notes and caveats
 
 - **Check mode** is not supported for first-time installs, because the keystore CLI needs the Kibana binaries. It works on hosts where Kibana is already installed.
@@ -506,6 +513,10 @@ The machine running Molecule needs libvirt, `virt-install`, `qemu-img` and `xorr
 must be able to manage `qemu:///system`. Each cloud image downloads once, checksum verified, to
 `/var/lib/libvirt/images/molecule`; each VM gets a throwaway disk on top of it. VM names include the
 scenario, so the three scenarios can also run side by side if the machine has the memory.
+
+[`molecule/kvm-noexec/`](molecule/kvm-noexec/) runs the kvm scenario with `/tmp`, `/var/tmp`,
+`/dev/shm` and `/home` mounted `noexec`, as the STIG has them, and also renders a page with
+Reporting's headless Chromium the way Reporting runs it (`molecule test -s kvm-noexec`).
 
 ## Role layout
 
