@@ -21,11 +21,12 @@
     daemon_reload: true
   when: _kb_systemd_override is changed  # noqa: no-handler - the unit has to be reloaded before it is started below
 
-# Read by the packaged unit (EnvironmentFile=-/etc/sysconfig/kibana)
+# Read by the packaged unit (EnvironmentFile=-/etc/sysconfig/kibana, or
+# /etc/default/kibana on Ubuntu)
 - name: System | Configure service environment
   ansible.builtin.template:
     src: sysconfig.j2
-    dest: /etc/sysconfig/kibana
+    dest: "{{ _kb_sysconfig_file }}"
     owner: root
     group: root
     mode: "0600"
@@ -93,12 +94,46 @@
     - kibana_manage_firewall | bool
     - (_kb_firewalld_state.stdout | default('') | trim) == 'active'
 
-- name: System | Report that firewalld is not running
-  ansible.builtin.debug:
-    msg: >-
-      kibana_manage_firewall is on but firewalld is not running on {{ inventory_hostname }}, so no
-      rules were added. Port {{ kibana_server_port }} has to be reachable however this host filters
-      traffic.
+# Ubuntu's firewall. Rules are only added while ufw is active, as with firewalld.
+- name: System | Check whether ufw is active
+  ansible.builtin.command:
+    cmd: ufw status
+  register: _kb_ufw_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
   when:
     - kibana_manage_firewall | bool
     - (_kb_firewalld_state.stdout | default('') | trim) != 'active'
+
+- name: System | Open Kibana and additional ports in ufw
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.split('/') | first | replace('-', ':') }}"
+    proto: "{{ item.split('/') | last }}"
+    comment: kibana
+  loop: "{{ [kibana_server_port ~ '/tcp'] + kibana_firewall_ports }}"
+  when:
+    - kibana_manage_firewall | bool
+    - _kb_ufw_active | bool
+
+- name: System | Report firewalld services that ufw cannot open
+  ansible.builtin.debug:
+    msg: >-
+      kibana_firewall_services ({{ kibana_firewall_services | join(', ') }}) are firewalld service
+      names, which ufw does not know. List their ports in kibana_firewall_ports instead.
+  when:
+    - kibana_manage_firewall | bool
+    - _kb_ufw_active | bool
+    - kibana_firewall_services | length > 0
+
+- name: System | Report that no firewall is running
+  ansible.builtin.debug:
+    msg: >-
+      kibana_manage_firewall is on but neither firewalld nor ufw is running on {{ inventory_hostname }},
+      so no rules were added. Port {{ kibana_server_port }} has to be reachable however this host
+      filters traffic.
+  when:
+    - kibana_manage_firewall | bool
+    - (_kb_firewalld_state.stdout | default('') | trim) != 'active'
+    - not (_kb_ufw_active | bool)

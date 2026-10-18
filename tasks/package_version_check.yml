@@ -3,13 +3,28 @@
 # pinned version exists in the package source before anything is changed; with
 # Satellite this catches content views that were not published or promoted.
 # For upgrades this runs well before upgrade.yml stops every instance.
+# The index has to be current to list a version published since the last update.
+- name: Install | Update the apt package index
+  ansible.builtin.apt:
+    update_cache: true
+    lock_timeout: "{{ kibana_dnf_lock_timeout }}"
+  register: _kb_apt_index
+  until: _kb_apt_index is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  changed_when: false
+  check_mode: false
+  when: _kb_pkg_mgr == 'apt'
+
+# apt-cache madison prints 'kibana | 9.5.4 | <source>' per version.
 - name: Install | Query available Kibana versions
   ansible.builtin.command:
     argv: >-
-      {{ ['dnf', '-q', 'repoquery', '--qf', '%{version}']
-         + ((['--disablerepo=*'] + (_kb_package_repos | map('regex_replace', '^', '--enablerepo=') | list))
-            if _kb_package_repos | length > 0 else [])
-         + ['kibana'] }}
+      {{ ['apt-cache', 'madison', 'kibana'] if _kb_pkg_mgr == 'apt'
+         else ['dnf', '-q', 'repoquery', '--qf', '%{version}']
+              + ((['--disablerepo=*'] + (_kb_package_repos | map('regex_replace', '^', '--enablerepo=') | list))
+                 if _kb_package_repos | length > 0 else [])
+              + ['kibana'] }}
   register: _kb_available_versions
   until: _kb_available_versions is not failed
   retries: "{{ kibana_task_retries }}"
@@ -20,7 +35,9 @@
 - name: Install | Verify the requested Kibana version is available
   vars:
     _kb_versions: >-
-      {{ _kb_available_versions.stdout_lines | map('trim') | select('match', '^[0-9]') | unique | list }}
+      {{ _kb_available_versions.stdout_lines
+         | map('regex_replace', '^[^|]*[|]([^|]*)[|].*$', '\1')
+         | map('trim') | select('match', '^[0-9]') | unique | list }}
   ansible.builtin.assert:
     that:
       - kibana_version in _kb_versions

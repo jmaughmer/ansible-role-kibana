@@ -3,12 +3,14 @@
 # Platform
 # =============================================================================
 # Distributions accepted by preflight, as reported by ansible_facts['distribution'].
-# Major versions 9 and 10 are supported. Other Enterprise Linux rebuilds, such as
-# CentOS (Stream) or OracleLinux, can be added here but are not tested.
+# Enterprise Linux 9 and 10 and Ubuntu 24.04 and 26.04 are supported. Other
+# Enterprise Linux rebuilds, such as CentOS (Stream) or OracleLinux, can be added
+# here but are not tested.
 kibana_supported_distributions:
   - RedHat
   - AlmaLinux
   - Rocky
+  - Ubuntu
 
 # =============================================================================
 # Package / repository
@@ -18,18 +20,22 @@ kibana_supported_distributions:
 kibana_version: "9.5.4"
 
 # Where the kibana package comes from:
-#   elastic   - Elastic's public repository, or a mirror of it. The role writes a
-#               disabled repository file and enables it only for its own dnf tasks.
+#   elastic   - Elastic's public repository, or a mirror of it. On Enterprise Linux
+#               the role writes a disabled repository file and enables it only for
+#               its own dnf tasks. On Ubuntu it adds an apt source and holds the
+#               package (apt-mark hold), so `apt upgrade` leaves it alone.
 #   satellite - a repository synced into Red Hat Satellite or Katello and delivered
 #               through subscription-manager (redhat.repo). Hosts must be registered
-#               and the repository must be in their content view.
+#               and the repository must be in their content view. Enterprise Linux only.
 #   none      - repositories are managed outside this role; packages come from
 #               whatever repositories are enabled on the host.
 # kibana_extra_packages always come from the host's enabled repositories.
 kibana_repo_source: elastic
 
 # --- kibana_repo_source: elastic ---
-kibana_repo_baseurl: "https://artifacts.elastic.co/packages/{{ _kb_major_version }}.x/yum"
+# The yum repository on Enterprise Linux, the apt one (suite stable, component main) on Ubuntu.
+kibana_repo_baseurl: >-
+  https://artifacts.elastic.co/packages/{{ _kb_major_version }}.x/{{ 'apt' if ansible_facts['os_family'] == 'Debian' else 'yum' }}
 kibana_repo_gpgkey: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
 kibana_repo_gpgcheck: true
 
@@ -58,6 +64,8 @@ kibana_package_version_check: true
 
 # Extra OS packages, e.g. fonts/libraries needed by Reporting (headless Chromium):
 #   [fontconfig, freetype, nss, ipa-gothic-fonts, xorg-x11-fonts-100dpi, xorg-x11-fonts-75dpi]
+# Package names are the distribution's own; on Ubuntu, for example:
+#   [fontconfig, libfreetype6, libnss3, fonts-ipafont-gothic]
 kibana_extra_packages: []
 
 # Inventory group containing every Kibana instance of this deployment. All of
@@ -177,7 +185,7 @@ kibana_telemetry_opt_in: false
 #   xpack.reporting.capture.timeouts.waitForElements: 60s
 kibana_settings_extra: {}
 
-# Extra environment for the service (/etc/sysconfig/kibana)
+# Extra environment for the service (/etc/sysconfig/kibana, /etc/default/kibana on Ubuntu)
 kibana_environment: {}
 
 kibana_systemd_limit_nofile: 65535
@@ -245,6 +253,7 @@ kibana_task_delay: 15
 kibana_download_async_timeout: 3600
 kibana_download_async_poll: 15
 # dnf repository per-request timeout (seconds) and download retries
+# (Enterprise Linux only; on Ubuntu apt's own Acquire::* settings apply)
 kibana_repo_timeout: 120
 kibana_repo_retries: 10
 kibana_dnf_lock_timeout: 300

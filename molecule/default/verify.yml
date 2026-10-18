@@ -11,6 +11,8 @@
   become: true
   gather_facts: false
   vars:
+    test_debian: "{{ ansible_facts['os_family'] == 'Debian' }}"
+    test_sysconfig: "{{ '/etc/default/kibana' if test_debian | bool else '/etc/sysconfig/kibana' }}"
     test_ssl_entry: "{{ ssl_certificates | selectattr('name', 'equalto', inventory_hostname) | first }}"
     test_basic: "{{ kibana_elasticsearch_auth == 'basic' }}"
     test_expected_keystore: >-
@@ -33,9 +35,18 @@
           - ansible_facts.services['kibana.service'].status == 'enabled'
 
     - name: Read the installed version
-      ansible.builtin.command: rpm -q --queryformat '%{VERSION}' kibana  # noqa: command-instead-of-module - reads one package's version
+      ansible.builtin.command: >-  # noqa: command-instead-of-module - reads one package's version
+        {{ "dpkg-query -W -f='${Version}' kibana" if test_debian | bool else "rpm -q --queryformat '%{VERSION}' kibana" }}
       register: test_rpm
       changed_when: false
+
+    # Held so a routine `apt upgrade` cannot upgrade Kibana
+    - name: Check the package is held
+      ansible.builtin.command: dpkg-query -W -f='${Status}' kibana
+      register: test_hold
+      changed_when: false
+      failed_when: test_hold.stdout is not match('hold ok installed')
+      when: test_debian | bool
 
     - name: Check the installed version is the role's default
       ansible.builtin.assert:
@@ -62,7 +73,7 @@
         - {path: /etc/kibana/certs/kibana.key, mode: "0640", group: kibana}
         - {path: /etc/kibana/certs/ca.crt, mode: "0644", group: kibana}
         - {path: /etc/kibana/certs/elasticsearch-ca.crt, mode: "0644", group: kibana}
-        - {path: /etc/sysconfig/kibana, mode: "0600", group: root}
+        - {path: "{{ test_sysconfig }}", mode: "0600", group: root}
         - {path: /etc/systemd/system/kibana.service.d/override.conf, mode: "0644", group: root}
       loop_control:
         label: "{{ item.path }}"
@@ -111,7 +122,7 @@
       loop:
         - /etc/kibana/node.options
         - /etc/systemd/system/kibana.service.d/override.conf
-        - /etc/sysconfig/kibana
+        - "{{ test_sysconfig }}"
 
     - name: Check the heap size, file limit and environment
       ansible.builtin.assert:

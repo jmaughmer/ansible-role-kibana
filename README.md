@@ -1,6 +1,6 @@
 # ansible-role-kibana
 
-An Ansible role that installs and configures Kibana 9.x on RHEL, AlmaLinux and Rocky Linux 9 and 10. It can manage one instance or several behind a load balancer.
+An Ansible role that installs and configures Kibana 9.x on RHEL, AlmaLinux and Rocky Linux 9 and 10, and on Ubuntu 24.04 and 26.04. It can manage one instance or several behind a load balancer.
 
 What it does:
 
@@ -15,24 +15,26 @@ What it does:
 
 ## Requirements
 
-- **Control node:** ansible-core 2.15 or later, plus the `ansible.posix` collection:
+- **Control node:** ansible-core 2.15 or later, plus the `ansible.posix` and `community.general` collections:
 
   ```bash
   ansible-galaxy collection install -r requirements.yml
   ```
 
-- **Target hosts:** RHEL, AlmaLinux or Rocky Linux 9 or 10 (see [Supported platforms](#supported-platforms)), with `openssl` installed. On STIG-hardened hosts see [Hardened hosts](#hardened-hosts-fips-selinux-fapolicyd) — fapolicyd has to allow Ansible before anything runs. They need a package source: Elastic's repository (`artifacts.elastic.co`) or a mirror, or a Red Hat Satellite or Katello server. See [Package source](#package-source).
+- **Target hosts:** RHEL, AlmaLinux or Rocky Linux 9 or 10, or Ubuntu 24.04 or 26.04 (see [Supported platforms](#supported-platforms)), with `openssl` installed. On STIG-hardened hosts see [Hardened hosts](#hardened-hosts-fips-selinux-fapolicyd) — fapolicyd has to allow Ansible before anything runs. They need a package source: Elastic's repository (`artifacts.elastic.co`) or a mirror, or (Enterprise Linux only) a Red Hat Satellite or Katello server. See [Package source](#package-source).
 - **Elasticsearch 9.x** at the same or a newer minor version than Kibana, reachable from the Kibana hosts. For example, one deployed with [ansible-role-elasticsearch](https://github.com/jmaughmer/ansible-role-elasticsearch).
 
 ## Supported platforms
 
-| Distribution | `ansible_facts['distribution']` | Major versions |
+| Distribution | `ansible_facts['distribution']` | Versions |
 |---|---|---|
 | Red Hat Enterprise Linux | `RedHat` | 9, 10 |
 | AlmaLinux | `AlmaLinux` | 9, 10 |
 | Rocky Linux | `Rocky` | 9, 10 |
+| Ubuntu | `Ubuntu` | 24.04, 26.04 |
 
-- **Same tasks everywhere.** The role has no distribution-specific tasks, and Kibana comes from Elastic's RPM packages on all of them.
+- **Package managers.** Kibana comes from Elastic's RPM packages through dnf on Enterprise Linux, and from Elastic's Debian packages through apt on Ubuntu. Everything else runs the same tasks on both.
+- **Ubuntu differences.** The firewall is ufw instead of firewalld (see [Firewall](#firewall)). SELinux and fapolicyd are normally absent, so their `auto` settings do nothing. Satellite is Enterprise Linux only.
 - **Other distributions.** Preflight stops the run on any other distribution or major version. To try another Enterprise Linux 9 or 10 rebuild, such as CentOS Stream (`CentOS`) or Oracle Linux (`OracleLinux`), add its distribution fact to `kibana_supported_distributions`. Those aren't tested.
 - **Satellite or Katello.** `kibana_repo_source: satellite` needs `subscription-manager` and a host registered to the server. RHEL hosts can use Red Hat Satellite or Katello. AlmaLinux and Rocky Linux hosts are normally registered to Katello; check your Satellite version's supported host operating systems before using it for them.
 - **Elastic's support.** See [Elastic's support matrix](https://www.elastic.co/support/matrix) for the operating systems Elastic supports for your Kibana release.
@@ -51,6 +53,8 @@ roles:
 collections:
   - name: ansible.posix
     version: ">=1.5.0"
+  - name: community.general
+    version: ">=8.0.0"
 ```
 
 ```bash
@@ -63,9 +67,11 @@ ansible-galaxy install -r requirements.yml
 
 | Value | Package source |
 |---|---|
-| `elastic` (default) | Elastic's public repository, or a mirror set with `kibana_repo_baseurl` and `kibana_repo_gpgkey`. The role writes a disabled repository file and enables it only for its own dnf tasks, so a routine `dnf update` never upgrades Kibana. |
-| `satellite` | A repository synced into Red Hat Satellite or Katello, delivered to registered hosts through subscription-manager. See [Red Hat Satellite or Katello](#red-hat-satellite-or-katello). |
+| `elastic` (default) | Elastic's public repository, or a mirror set with `kibana_repo_baseurl` and `kibana_repo_gpgkey`. On Enterprise Linux the role writes a disabled repository file and enables it only for its own dnf tasks, so a routine `dnf update` never upgrades Kibana. On Ubuntu it saves the key to `/etc/apt/keyrings/elastic.asc`, adds `/etc/apt/sources.list.d/elastic-9.x.sources` (suite `stable`, component `main`) and holds the package, so a routine `apt upgrade` never upgrades it. The default `kibana_repo_baseurl` is the yum or apt repository to match the host. |
+| `satellite` | Enterprise Linux only. A repository synced into Red Hat Satellite or Katello, delivered to registered hosts through subscription-manager. See [Red Hat Satellite or Katello](#red-hat-satellite-or-katello). |
 | `none` | Repositories you manage yourself. The role installs from whatever is enabled on the host. |
+
+**Ubuntu and other Elastic roles.** The elasticsearch, logstash and elastic_fleet roles write the same key file and apt source, so a host running more than one of them keeps a single definition. apt refuses two sources for one URL with different keys, so remove any Elastic source added by hand (for example `elastic-9.x.list` from Elastic's install guide) first. To upgrade Kibana outside the role, `apt-mark unhold kibana` first.
 
 **Version check.** Before installing or upgrading, the role checks that `kibana_version` is available from the package source, so a missing version fails before anything changes. You can turn this off with `kibana_package_version_check`.
 
@@ -281,7 +287,7 @@ The role builds `kibana.yml` from these settings as one YAML map, so there are n
 - keystore entries
 - certificates
 - `node.options`
-- `/etc/sysconfig/kibana`
+- `/etc/sysconfig/kibana` (`/etc/default/kibana` on Ubuntu)
 - the systemd drop-in
 
 **Configuration changes (same version).** Running instances are restarted in batches of `kibana_restart_batch_size`. Each batch waits until `/api/status` answers before the next batch starts.
@@ -342,16 +348,18 @@ A retried task can take up to retries × (delay + attempt time) before it gives 
 ## Firewall
 
 With `kibana_manage_firewall` (on by default) the role opens `kibana_server_port` in firewalld,
-permanently and immediately, in `kibana_firewall_zone`:
+permanently and immediately, in `kibana_firewall_zone`. On a host running ufw instead (Ubuntu), it
+adds `allow` rules for the same ports:
 
 | Variable | Default | |
 |---|---|---|
 | `kibana_manage_firewall` | `true` | Set to `false` to manage the firewall yourself |
-| `kibana_firewall_zone` | `public` | Zone the rules go in |
+| `kibana_firewall_zone` | `public` | firewalld zone the rules go in |
 | `kibana_firewall_ports` | `[]` | Anything else this host serves, e.g. `["80/tcp"]` for a redirect |
-| `kibana_firewall_services` | `[]` | Named firewalld services |
+| `kibana_firewall_services` | `[]` | Named firewalld services (firewalld only; list their ports for ufw) |
 
-If firewalld is not running the role says which port still has to be reachable rather than failing.
+The role never starts or enables a firewall. If neither firewalld nor ufw is active it says which
+port still has to be reachable rather than failing.
 
 ## Hardened hosts (FIPS, SELinux, fapolicyd)
 
@@ -486,13 +494,18 @@ KVM/libvirt (`qemu:///system`). Each VM has its own kernel, so SELinux is enforc
 as `vm.max_map_count` are the VM's own. Overrides for the VMs go in
 `molecule/kvm/inventory/group_vars/<group>/kvm.yml`.
 
+[`molecule/kvm-ubuntu2404/`](molecule/kvm-ubuntu2404/) and
+[`molecule/kvm-ubuntu2604/`](molecule/kvm-ubuntu2604/) run the same thing on Ubuntu 24.04 and 26.04
+VMs. They only swap the cloud image, and share `molecule/kvm/`'s playbooks and inventory.
+
 ```bash
-molecule test -s kvm
+for s in kvm kvm-ubuntu2404 kvm-ubuntu2604; do molecule test -s "$s" || break; done
 ```
 
 The machine running Molecule needs libvirt, `virt-install`, `qemu-img` and `xorriso`, and its user
-must be able to manage `qemu:///system`. The AlmaLinux 10 cloud image downloads once, checksum
-verified, to `/var/lib/libvirt/images/molecule`; each VM gets a throwaway disk on top of it.
+must be able to manage `qemu:///system`. Each cloud image downloads once, checksum verified, to
+`/var/lib/libvirt/images/molecule`; each VM gets a throwaway disk on top of it. VM names include the
+scenario, so the three scenarios can also run side by side if the machine has the memory.
 
 ## Role layout
 
