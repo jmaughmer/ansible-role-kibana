@@ -1,0 +1,100 @@
+---
+# Rewrites the fapolicyd trust entries on one host. The entries hold a size and
+# a checksum per file, so they are rewritten whenever the package changes: in
+# phase 1, and during an upgrade once the new package is installed, before
+# Kibana starts again.
+# Inputs:
+#   _kb_fapolicyd_host   host to act on (tasks are delegated to it); its
+#                        _kb_fapolicyd_trust fact gives the paths, the trust
+#                        file and the Kibana home
+
+- name: "Trust | Check which paths exist on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.paths }}"
+  delegate_to: "{{ _kb_fapolicyd_host }}"
+  register: _kb_fapolicyd_path_stat
+
+- name: "Trust | Remove the previous trust entries on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.file:
+    path: "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.path }}"
+    state: absent
+  delegate_to: "{{ _kb_fapolicyd_host }}"
+
+- name: "Trust | Add the extra paths on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/fapolicyd-cli
+      - --file
+      - add
+      - "{{ item }}"
+      - --trust-file
+      - "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.name }}"
+  loop: "{{ _kb_fapolicyd_path_stat.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+  delegate_to: "{{ _kb_fapolicyd_host }}"
+  register: _kb_fapolicyd_added
+  until: _kb_fapolicyd_added is not failed
+  retries: "{{ kibana_task_retries }}"
+  delay: "{{ kibana_task_delay }}"
+  changed_when: true
+
+# Thousands of files, so they are found and added on the host in one task
+# rather than listed back to the controller. Files under the extra paths are
+# left out, because fapolicyd-cli refuses to add a file twice.
+- name: "Trust | Add the package files rpm trust leaves out on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ _kb_fapolicyd_add_script }}"
+      - "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.name }}"
+      - "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.home }}"
+      - "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.patterns | to_json }}"
+      - "{{ _kb_fapolicyd_path_stat.results | selectattr('stat.exists') | map(attribute='item') | list | to_json }}"
+  vars:
+    _kb_fapolicyd_add_script: |
+      import fnmatch, json, os, subprocess, sys
+      name, home, patterns, skip = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), json.loads(sys.argv[4])
+      skip = [p.rstrip("/") for p in skip]
+      def skipped(path):
+          return any(path == p or path.startswith(p + "/") for p in skip)
+      added = 0
+      for root, dirs, files in os.walk(home):
+          dirs[:] = sorted(d for d in dirs if not skipped(os.path.join(root, d)))
+          for f in sorted(files):
+              path = os.path.join(root, f)
+              if os.path.islink(path) or skipped(path) or not any(fnmatch.fnmatchcase(f, p) for p in patterns):
+                  continue
+              subprocess.run(["/usr/sbin/fapolicyd-cli", "--file", "add", path, "--trust-file", name],
+                             check=True, stdout=subprocess.DEVNULL)
+              added += 1
+      print(added)
+  delegate_to: "{{ _kb_fapolicyd_host }}"
+  register: _kb_fapolicyd_libs_added
+  changed_when: (_kb_fapolicyd_libs_added.stdout | int) > 0
+
+- name: "Trust | Load the trust database on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.command:
+    cmd: /usr/sbin/fapolicyd-cli --update
+  delegate_to: "{{ _kb_fapolicyd_host }}"
+  changed_when: true
+  when: _kb_fapolicyd_added is changed or _kb_fapolicyd_libs_added is changed
+
+- name: "Trust | Read the package fingerprint on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.command:
+    argv: "{{ _kb_fapolicyd_fingerprint_argv }}"
+  delegate_to: "{{ _kb_fapolicyd_host }}"
+  register: _kb_fapolicyd_fingerprint_now
+  changed_when: false
+  check_mode: false
+
+- name: "Trust | Record what the entries were written for on {{ _kb_fapolicyd_host }}"
+  ansible.builtin.copy:
+    dest: "{{ hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.state }}"
+    content: >-
+      {{ {'spec': hostvars[_kb_fapolicyd_host]._kb_fapolicyd_trust.spec,
+          'fingerprint': _kb_fapolicyd_fingerprint_now.stdout} | to_json }}
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: "{{ _kb_fapolicyd_host }}"

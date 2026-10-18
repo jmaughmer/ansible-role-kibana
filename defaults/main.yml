@@ -62,8 +62,11 @@ kibana_satellite_gpgkey: ""
 # package source. Catches Satellite content views that were not published or promoted.
 kibana_package_version_check: true
 
-# Extra OS packages, e.g. fonts/libraries needed by Reporting (headless Chromium):
-#   [fontconfig, freetype, nss, ipa-gothic-fonts, xorg-x11-fonts-100dpi, xorg-x11-fonts-75dpi]
+# Extra OS packages. Reporting's headless browser (PDF and PNG reports) needs
+# nss, which minimal and cloud images leave out; without it the browser does
+# not launch. That is all it needed on AlmaLinux 10, where Kibana draws text
+# with its own fonts:
+#   [nss]
 # Package names are the distribution's own; on Ubuntu, for example:
 #   [fontconfig, libfreetype6, libnss3, fonts-ipafont-gothic]
 kibana_extra_packages: []
@@ -223,7 +226,7 @@ kibana_stop_retries: 60
 kibana_stop_delay: 5
 
 # =============================================================================
-# Hardened hosts (SELinux, TLS)
+# Hardened hosts (SELinux, fapolicyd, TLS)
 # =============================================================================
 # SELinux: label data and log directories that have been moved out of their
 # default locations, which otherwise end up as default_t.
@@ -234,6 +237,21 @@ kibana_selinux_data_type: var_lib_t
 kibana_selinux_log_type: var_log_t
 # Extra or overriding contexts: { "/srv/kibana": "var_lib_t" }
 kibana_selinux_fcontexts: {}
+
+# fapolicyd: trust what Kibana runs that the default fapolicyd filter leaves
+# out of the rpm trust: the package's JavaScript modules ending in .cjs or
+# .mjs, a few data files fapolicyd takes for code, and the headless browser
+# reporting starts, with its libraries.
+#   auto  - manage the trust entries when fapolicyd is running
+#   true / false
+kibana_fapolicyd_trust: auto
+# More paths to trust, such as plugins installed by hand. Directories are
+# added recursively.
+kibana_fapolicyd_trust_paths: []
+# File under /etc/fapolicyd/trust.d/ the entries are written to
+kibana_fapolicyd_trust_file: ansible-kibana
+# Rewrite the entries even when nothing changed
+kibana_fapolicyd_force_trust: false
 
 # TLS protocols and cipher suites Kibana serves. Empty keeps Kibana's defaults
 # (TLSv1.3 and TLSv1.2).

@@ -1,0 +1,80 @@
+---
+# fapolicyd only allows code it trusts, and its trust comes from the rpm
+# database. But the default fapolicyd-filter.conf leaves usr/share/ out of the
+# rpm trust except for scripts such as *.js, so Node.js running as the kibana
+# user cannot load the package's .cjs and .mjs modules, and reporting cannot
+# start its headless browser.
+- name: Trust | Check whether fapolicyd is running
+  ansible.builtin.command:  # noqa: command-instead-of-module - only reads the state, which must not fail when the unit is absent
+    cmd: systemctl is-active fapolicyd
+  register: _kb_fapolicyd_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: (kibana_fapolicyd_trust | string | lower) == 'auto'
+
+# Published as a fact: an upgrade refreshes every host's entries from the
+# host that runs it, which cannot see this host's role variables through
+# hostvars.
+- name: Trust | Record what this host trusts
+  ansible.builtin.set_fact:
+    _kb_fapolicyd_trust: >-
+      {{ {'paths': kibana_fapolicyd_trust_paths, 'path': _kb_fapolicyd_trust_file, 'name': kibana_fapolicyd_trust_file,
+          'home': kibana_home, 'patterns': _kb_fapolicyd_rpm_patterns,
+          'state': _kb_fapolicyd_state_file, 'spec': _kb_fapolicyd_spec}
+         if _kb_fapolicyd_manage | bool else {} }}
+
+- name: Trust | Manage the trust database
+  when: _kb_fapolicyd_manage | bool
+  block:
+    - name: Trust | Verify fapolicyd-cli is available
+      ansible.builtin.stat:
+        path: /usr/sbin/fapolicyd-cli
+      register: _kb_fapolicyd_cli
+
+    - name: Trust | Report a missing fapolicyd-cli
+      ansible.builtin.assert:
+        that:
+          - _kb_fapolicyd_cli.stat.exists
+        fail_msg: >-
+          kibana_fapolicyd_trust asks for trust entries, but /usr/sbin/fapolicyd-cli is not
+          installed on {{ inventory_hostname }}. Install the fapolicyd package, or set
+          kibana_fapolicyd_trust: false and trust the package's modules another way.
+        quiet: true
+
+    - name: Trust | Check the trust file
+      ansible.builtin.stat:
+        path: "{{ _kb_fapolicyd_trust_file }}"
+      register: _kb_fapolicyd_file
+
+    - name: Trust | Read what the entries were written for
+      ansible.builtin.slurp:
+        src: "{{ _kb_fapolicyd_state_file }}"
+      register: _kb_fapolicyd_state_read
+      failed_when: false
+      when: _kb_fapolicyd_file.stat.exists
+
+    # A fingerprint that differs from the recorded one means the package
+    # changed after the entries were written: by hand, or in a run that
+    # stopped before it refreshed them.
+    - name: Trust | Read the package fingerprint
+      ansible.builtin.command:
+        argv: "{{ _kb_fapolicyd_fingerprint_argv }}"
+      register: _kb_fapolicyd_fingerprint
+      changed_when: false
+      check_mode: false
+
+    # The entries hold a size and a checksum per file, so they are rewritten
+    # whenever the files they cover have changed.
+    - name: Trust | Refresh the trust entries
+      ansible.builtin.include_tasks:
+        file: fapolicyd_refresh.yml
+        apply:
+          tags: [kibana, kibana_install, kibana_system]
+      vars:
+        _kb_fapolicyd_host: "{{ inventory_hostname }}"
+      when: >-
+        (not _kb_fapolicyd_file.stat.exists)
+        or (_kb_fapolicyd_state_read.content | default('e30=') | b64decode | from_json)
+           != {'spec': _kb_fapolicyd_spec, 'fingerprint': _kb_fapolicyd_fingerprint.stdout}
+        or (kibana_fapolicyd_force_trust | bool)
