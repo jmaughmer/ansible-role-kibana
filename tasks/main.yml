@@ -29,6 +29,11 @@
     - _kb_selinux_fcontexts | length > 0
   tags: [kibana, kibana_system]
 
+- name: Manage fapolicyd trust
+  ansible.builtin.import_tasks: fapolicyd.yml
+  when: (kibana_fapolicyd_trust | string | lower) != 'false'
+  tags: [kibana, kibana_install, kibana_system]
+
 - name: Install TLS certificates
   ansible.builtin.import_tasks: certificates.yml
   tags: [kibana, kibana_tls]
