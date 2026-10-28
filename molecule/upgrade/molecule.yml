@@ -19,24 +19,24 @@ driver:
   name: podman
 
 platforms:
-  - name: kes-u1
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-upgrade-es
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always
     network: kibana_upgrade
     groups: [elasticsearch]
 
-  - name: kb-u1
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-upgrade-kb1
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always
     network: kibana_upgrade
     groups: [kibana]
 
-  - name: kb-u2
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-upgrade-kb2
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always

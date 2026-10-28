@@ -1,10 +1,16 @@
 ---
 # Three systemd containers (rootless Podman is fine) on one network:
-#   kes-1       Elasticsearch, single node, installed by prepare.yml
-#   kb-1, kb-2  the inventory group "kibana", which the role is applied to
-# MOLECULE_DISTRO picks the EL release (default rockylinux9; also
-# rockylinux10) — see the README's "Testing" section. The playbooks and
-# inventory here are shared with the other scenarios.
+#   kibana-default-es   Elasticsearch, single node, installed by prepare.yml
+#   kibana-default-kb1  the inventory group "kibana", which the role is
+#   kibana-default-kb2  applied to
+# The playbooks and inventory find the hosts by group, and every scenario
+# names its hosts and network after itself, so scenarios can run at the same
+# time.
+# MOLECULE_EL picks the AlmaLinux release of the almalinux/<release>-init
+# image (default 9; also 10) — see the README's "Testing" section. The
+# playbooks and inventory here are shared with the other scenarios. Ansible
+# connects as root, so the playbooks do not use become: the images have no
+# sudo.
 #
 # Inside containers SELinux is off and firewalld isn't installed, so this
 # exercises the role's skip paths for both.
@@ -20,28 +26,28 @@ driver:
   name: podman
 
 platforms:
-  - name: kes-1
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-default-es
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false   # keep the image's own CMD: systemd as PID 1
     systemd: always
-    network: kibana_molecule  # created by the driver from the first platform
+    network: kibana_default  # created by the driver from the first platform
     groups: [elasticsearch]
 
-  - name: kb-1
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-default-kb1
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always
-    network: kibana_molecule
+    network: kibana_default
     groups: [kibana]
 
-  - name: kb-2
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-default-kb2
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always
-    network: kibana_molecule
+    network: kibana_default
     groups: [kibana]
 
 provisioner:

@@ -4,7 +4,6 @@
 
 - name: Verify Kibana runs without an executable /tmp
   hosts: kibana
-  become: true
   gather_facts: false
   tasks:
     - name: Read the mount options of /tmp
@@ -18,11 +17,12 @@
         that:
           - "'noexec' in test_tmp_options.stdout.split(',')"
 
+    # Not a bare "noexec": the host names contain it, and Kibana logs them.
     - name: Look for native code that failed to load
       ansible.builtin.shell: >-
         set -o pipefail;
         journalctl --unit kibana --boot --no-pager --output cat
-        | grep -iE 'failed to map segment|noexec|ERR_DLOPEN_FAILED'
+        | grep -iE 'failed to map segment|ERR_DLOPEN_FAILED'
       args:
         executable: /bin/bash
       register: test_load_errors
@@ -44,8 +44,10 @@
       register: test_chromium
 
     # As Reporting runs it: as kibana, with its profile in the temporary
-    # directory and shared memory in /dev/shm, both noexec here
-    - name: Render a page with it
+    # directory and shared memory in /dev/shm, both noexec here, driven over
+    # the DevTools protocol. (--dump-dom and --screenshot hang in a container.)
+    # timeout stops it after the checks.
+    - name: Start it
       ansible.builtin.command:
         argv:
           - runuser
@@ -59,13 +61,27 @@
           - --no-sandbox
           - --disable-gpu
           - --user-data-dir=/tmp/molecule-chromium
-          - --dump-dom
-          - "data:text/html,<p>rendered-under-noexec</p>"
-      register: test_render
+          - --remote-debugging-port=9333
+          - about:blank
+      async: 150
+      poll: 0
       changed_when: false
 
+    - name: Wait for its DevTools endpoint
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9333
+        timeout: 60
+
+    - name: Open a page
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9333/json/new?data:text/html,{{ '<title>rendered-under-noexec</title>' | urlencode }}"
+        method: PUT
+
     - name: Check the page rendered
-      ansible.builtin.assert:
-        that:
-          - test_render.stdout is search('rendered-under-noexec')
-        fail_msg: "{{ test_render.stderr_lines }}"
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9333/json/list
+      register: test_pages
+      until: test_pages.json | selectattr('title', 'equalto', 'rendered-under-noexec') | list | length > 0
+      retries: 30
+      delay: 1

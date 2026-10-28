@@ -457,7 +457,7 @@ correctly where the package puts them; moved elsewhere they come out as `default
 
 The STIG mounts `/tmp`, `/var/tmp` and `/dev/shm` with `noexec`. Kibana needs nothing for that:
 Node.js loads its native modules from Kibana's home, and Reporting's headless Chromium runs from there
-too, keeping only its profile and shared memory in `/tmp` and `/dev/shm`. The `kvm-noexec` scenario
+too, keeping only its profile and shared memory in `/tmp` and `/dev/shm`. The `noexec` scenario
 tests both (see [Testing](#testing)).
 
 ## Notes and caveats
@@ -472,8 +472,8 @@ tests both (see [Testing](#testing)).
 ## Testing
 
 [`molecule/default/`](molecule/default/) runs the role against three systemd containers on one
-container network: `kes-1`, a single Elasticsearch node at the role's default `kibana_version`, and
-two Kibana instances, `kb-1` and `kb-2`. [`prepare.yml`](molecule/default/prepare.yml) makes a test CA
+container network: `kibana-default-es`, a single Elasticsearch node at the role's default
+`kibana_version`, and two Kibana instances, `kibana-default-kb1` and `kibana-default-kb2`. [`prepare.yml`](molecule/default/prepare.yml) makes a test CA
 and a certificate for every host, starts Elasticsearch with TLS on HTTP, and creates a service
 account token for `elastic/kibana`. The Kibana certificates are left on the hosts as files, as
 ansible-role-elastic-tls leaves them. The sequence is:
@@ -503,61 +503,67 @@ Other scenarios:
 | `basic` | Basic authentication as `kibana_system`, whose password the role sets with admin credentials, and TLS material given inline with an encrypted key and its passphrase. |
 | `upgrade` | Two instances at an older 9.x release are upgraded to the default version. An upgrade run that leaves an instance out is refused first. Every instance stops before the first starts again, and that one starts alone. Going back to the older release is refused. |
 | `preflight` | Settings preflight must refuse, each in its own check, without printing a secret. These include an unsupported distribution, a host outside `kibana_group`, an inexact or 8.x version, a bad package source, unknown node roles, missing or forbidden credentials, short or differing encryption keys, a malformed firewall port, and missing TLS material. Nothing is installed. |
-| `docker` | The default scenario on Docker instead of Podman. |
+| `ubuntu` | The default scenario on Ubuntu containers, from the official `ubuntu` image with systemd and Python added ([`Dockerfile.j2`](molecule/ubuntu/Dockerfile.j2)). |
+| `noexec` | The default scenario with `/tmp`, `/var/tmp`, `/dev/shm` and `/home` mounted `noexec`, as the STIG has them. Verify also renders a page with Reporting's headless Chromium the way Reporting runs it. |
 
 ```bash
 pip install -r molecule/requirements.txt
 ```
 
 ```bash
-for s in default basic upgrade preflight; do molecule test -s "$s" || break; done
+for s in default basic upgrade preflight ubuntu noexec; do molecule test -s "$s" || break; done
 ```
 
-The scenarios use Podman (rootless works), except `docker`, which needs Docker. They download
-Elasticsearch and Kibana from Elastic's repository, and Elasticsearch and two Kibana instances need
-about 4 GB of memory. `MOLECULE_DISTRO` picks the image (default `rockylinux9`; also `rockylinux10`):
+The scenarios use Podman (rootless works). Any Linux host with systemd and Podman will do, such as
+an AlmaLinux 10 WSL 2 distribution with `systemd=true` in `/etc/wsl.conf`; no KVM is needed. They
+download Elasticsearch and Kibana from Elastic's repository, and Elasticsearch and two Kibana
+instances need about 4 GB of memory. `MOLECULE_EL` picks the `docker.io/almalinux/<release>-init`
+image (default `9`; also `10`):
 
 ```bash
-MOLECULE_DISTRO=rockylinux10 molecule test -s preflight
+MOLECULE_EL=10 molecule test -s preflight
 ```
+
+`MOLECULE_UBUNTU` picks the release for the `ubuntu` scenario (default `24.04`; also `26.04`).
+
+Each scenario names its containers and network after itself (`kibana-<scenario>-<host>`, on
+`kibana_<scenario>`), so different scenarios, in this role or the others, can run at the same
+time, memory permitting:
+
+```bash
+for s in default basic upgrade preflight ubuntu noexec; do molecule test -s "$s" & done; wait
+```
+
+One scenario runs once at a time: Molecule keeps a single state per scenario, so run
+`MOLECULE_EL=9` and `MOLECULE_EL=10` of one scenario one after the other.
 
 Lint with `yamllint .` and `ansible-lint` (configured by [`.yamllint`](.yamllint) and
 [`.ansible-lint`](.ansible-lint)). There is no GitHub Actions workflow; run the lint and Molecule
 scenarios locally.
 
-Not covered by containers: SELinux contexts for relocated directories, firewalld rules,
-FIPS mode, and Satellite repositories. These need virtual machines with SELinux enforcing,
-firewalld running, FIPS enabled, or a Satellite registration.
+Not covered by containers: SELinux enforcing (the containers share the host's kernel, and WSL's
+does not enforce SELinux), SELinux contexts for relocated directories, firewalld rules, FIPS mode,
+fapolicyd, and Satellite repositories. These need virtual machines with SELinux enforcing,
+firewalld running, FIPS enabled, fapolicyd enforcing, or a Satellite registration.
 
-### On KVM virtual machines
-
-[`molecule/kvm/`](molecule/kvm/) runs the default scenario on real AlmaLinux 10 virtual machines
-instead of containers: the same hosts, groups, playbooks and inventory, one VM per host, on local
-KVM/libvirt (`qemu:///system`). Each VM has its own kernel, so SELinux is enforcing and settings such
-as `vm.max_map_count` are the VM's own. Overrides for the VMs go in
-`molecule/kvm/inventory/group_vars/<group>/kvm.yml`.
-
-[`molecule/kvm-ubuntu2404/`](molecule/kvm-ubuntu2404/) and
-[`molecule/kvm-ubuntu2604/`](molecule/kvm-ubuntu2604/) run the same thing on Ubuntu 24.04 and 26.04
-VMs. They only swap the cloud image, and share `molecule/kvm/`'s playbooks and inventory.
+### fapolicyd, on KVM virtual machines
 
 [`molecule/kvm-fapolicyd/`](molecule/kvm-fapolicyd/) runs the upgrade scenario on AlmaLinux 10 VMs,
 with fapolicyd enforcing on the Kibana hosts, `allow_filesystem_mark = 1`, and nothing added to its
 rules. It checks that both instances install, upgrade and run with nothing denied, and that the trust
-entries cover the modules and the reporting browser.
+entries cover the modules and the reporting browser. It cannot run in containers: fapolicyd needs a
+privileged, rootful container there, and its filesystem marks would then cover the container host's
+own filesystems, so a denial could stop programs starting on the host.
 
 ```bash
-for s in kvm kvm-ubuntu2404 kvm-ubuntu2604 kvm-fapolicyd; do molecule test -s "$s" || break; done
+molecule test -s kvm-fapolicyd
 ```
 
-The machine running Molecule needs libvirt, `virt-install`, `qemu-img` and `xorriso`, and its user
-must be able to manage `qemu:///system`. Each cloud image downloads once, checksum verified, to
-`/var/lib/libvirt/images/molecule`; each VM gets a throwaway disk on top of it. VM names include the
-scenario, so the three scenarios can also run side by side if the machine has the memory.
-
-[`molecule/kvm-noexec/`](molecule/kvm-noexec/) runs the kvm scenario with `/tmp`, `/var/tmp`,
-`/dev/shm` and `/home` mounted `noexec`, as the STIG has them, and also renders a page with
-Reporting's headless Chromium the way Reporting runs it (`molecule test -s kvm-noexec`).
+The machine running Molecule needs KVM, libvirt, `virt-install`, `qemu-img` and `xorriso`, and its
+user must be able to manage `qemu:///system`. The cloud image downloads once, checksum verified, to
+`/var/lib/libvirt/images/molecule`; each VM gets a throwaway disk on top of it. The scenario's
+inventory links to the default scenario's files, so run it from a checkout with symbolic links
+(not a Windows one with `core.symlinks=false`).
 
 ## Role layout
 
@@ -584,7 +590,7 @@ Reporting's headless Chromium the way Reporting runs it (`molecule test -s kvm-n
 │   └── upgrade.yml              # coordinated all-instance upgrade
 ├── templates/
 ├── examples/
-└── molecule/                   # default, basic, upgrade, preflight (Podman) and docker scenarios
+└── molecule/                   # default, basic, upgrade, preflight, ubuntu, noexec (Podman), kvm-fapolicyd (VMs)
 ```
 
 ## Related roles

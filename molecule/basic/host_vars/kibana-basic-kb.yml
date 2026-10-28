@@ -12,11 +12,11 @@ kibana_elasticsearch_admin_password: "{{ test_admin_password }}"
 # Inline PEM content, as it would come from a vault. The key is the PKCS#8
 # encrypted copy prepare.yml made; its passphrase goes into the keystore.
 ssl_certificates:
-  - name: kb-b1
+  - name: "{{ inventory_hostname }}"
     certificate:
-      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/kb-b1.crt', rstrip=false) }}"
+      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/' ~ inventory_hostname ~ '.crt', rstrip=false) }}"
     key:
-      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/kb-b1.enc.key', rstrip=false) }}"
+      content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/' ~ inventory_hostname ~ '.enc.key', rstrip=false) }}"
       passphrase: "{{ test_key_passphrase }}"
     ca:
       content: "{{ lookup('ansible.builtin.file', test_pki_dir ~ '/ca.crt', rstrip=false) }}"

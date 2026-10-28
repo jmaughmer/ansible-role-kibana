@@ -3,7 +3,6 @@
 # preflight with the case's settings, then check the outcome on each host.
 - name: Preflight case | {{ test_case.name | default('') }}
   hosts: kibana
-  become: true
   gather_facts: true
   vars_files:
     - vars/shared.yml

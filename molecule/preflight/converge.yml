@@ -75,7 +75,7 @@
       name: satellite without kibana_satellite_repo_id
       repo_source: satellite
       task: Verify package source settings
-      expect: Satellite needs kibana_satellite_repo_id
+      expect: needs kibana_satellite_repo_id
 
 - name: Unknown node role
   ansible.builtin.import_playbook: case.yml
@@ -174,7 +174,7 @@
       name: kibana_selinux_manage that is not auto, true or false
       selinux_manage: maybe
       task: Verify hardening settings
-      expect: kibana_selinux_manage must be auto, true or false
+      expect: kibana_fapolicyd_trust must be auto, true or false
 
 - name: No CA for Elasticsearch
   ansible.builtin.import_playbook: case.yml

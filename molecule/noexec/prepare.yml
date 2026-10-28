@@ -1,0 +1,30 @@
+---
+- name: Prepare as in the default scenario
+  ansible.builtin.import_playbook: ../default/prepare.yml
+
+# molecule.yml mounts the temporary filesystems and /home as tmpfs, noexec as
+# the DISA STIG has them (the STIG asks for separate filesystems, which is
+# what matters here); Podman mounts /dev/shm noexec itself. Check before
+# converge that none of them lets programs run.
+- name: Check the temporary filesystems and /home are noexec
+  hosts: all
+  gather_facts: false
+  vars:
+    test_noexec_paths: [/tmp, /var/tmp, /dev/shm, /home]
+  tasks:
+    - name: Read the mount options
+      ansible.builtin.command:
+        argv: [findmnt, --noheadings, --output, OPTIONS, --target, "{{ item }}"]
+      loop: "{{ test_noexec_paths }}"
+      register: test_mount_options
+      changed_when: false
+
+    - name: Check every one is noexec
+      ansible.builtin.assert:
+        that:
+          - "'noexec' in item.stdout.split(',')"
+        fail_msg: "{{ item.item }} is mounted {{ item.stdout }}"
+        quiet: true
+      loop: "{{ test_mount_options.results }}"
+      loop_control:
+        label: "{{ item.item }}"

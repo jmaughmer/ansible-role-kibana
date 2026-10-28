@@ -5,11 +5,11 @@
   gather_facts: true
   tasks: []
 
-# What `--limit kb-u1` gives the role: the other instance is outside the play,
-# so it would keep running the old release against migrated indices.
+# What `--limit kibana-upgrade-kb1` gives the role: the other instance is
+# outside the play, so it would keep running the old release against migrated
+# indices.
 - name: Refuse an upgrade that leaves an instance out
   hosts: kibana[0]
-  become: true
   gather_facts: false
   vars_files:
     - vars/upgrade.yml
@@ -40,7 +40,6 @@
 
 - name: Upgrade every instance
   hosts: kibana
-  become: true
   gather_facts: false
   tasks:
     - name: Apply the role
@@ -78,7 +77,6 @@
 
 - name: Refuse a downgrade
   hosts: kibana
-  become: true
   gather_facts: false
   vars_files:
     - vars/upgrade.yml

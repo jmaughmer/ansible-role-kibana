@@ -8,7 +8,6 @@
 
 - name: Verify the installation and configuration
   hosts: kibana
-  become: true
   gather_facts: false
   vars:
     test_debian: "{{ ansible_facts['os_family'] == 'Debian' }}"
@@ -176,7 +175,6 @@
 # issued by one instance is accepted by the others.
 - name: Verify a session from one instance works on every instance
   hosts: kibana
-  become: true
   gather_facts: false
   tasks:
     - name: Log in on the first instance

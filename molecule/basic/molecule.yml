@@ -1,6 +1,6 @@
 ---
 # One Kibana instance with the alternatives to the default scenario's settings
-# (host_vars/kb-b1.yml):
+# (host_vars/kibana-basic-kb.yml):
 #   - basic authentication as kibana_system, whose password the role sets in
 #     Elasticsearch with admin credentials (kibana_elasticsearch_manage_password);
 #   - TLS material given inline, as from a vault, with an encrypted key and its
@@ -18,16 +18,16 @@ driver:
   name: podman
 
 platforms:
-  - name: kes-b1
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-basic-es
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always
     network: kibana_basic
     groups: [elasticsearch]
 
-  - name: kb-b1
-    image: "docker.io/geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+  - name: kibana-basic-kb
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
     pre_build_image: true
     override_command: false
     systemd: always

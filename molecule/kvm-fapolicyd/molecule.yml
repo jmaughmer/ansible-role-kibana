@@ -5,8 +5,14 @@
 # them, and verify checks them as the default scenario does, and that
 # fapolicyd denied nothing. Nothing is added to fapolicyd's rules for Ansible,
 # which runs as root without pipelining, as in production.
-# Needs the same KVM/libvirt setup as ../kvm.
 #   molecule test -s kvm-fapolicyd
+#
+# The only scenario on VMs (local KVM/libvirt, qemu:///system), because
+# fapolicyd cannot run safely in a container (see the README). create.yml
+# boots one VM per platform from a cached cloud image, with a user with
+# passwordless sudo; group_vars/kvm/become.yml escalates on the VMs. The
+# machine running Molecule needs KVM, libvirt, virt-install, qemu-img and
+# xorriso, and its user must be able to manage qemu:///system.
 role_name_check: 1
 
 dependency:
@@ -57,15 +63,15 @@ provisioner:
     ssh_connection:
       pipelining: false
   playbooks:
-    create: ../kvm/create.yml
-    destroy: ../kvm/destroy.yml
+    create: create.yml
+    destroy: destroy.yml
     prepare: prepare.yml
     converge: ../upgrade/converge.yml
     side_effect: ../upgrade/side_effect.yml
     verify: verify.yml
   inventory:
     links:
-      group_vars: ../kvm/inventory/group_vars/
+      group_vars: inventory/group_vars/
 
 verifier:
   name: ansible

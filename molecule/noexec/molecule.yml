@@ -1,0 +1,79 @@
+---
+# The default scenario with /tmp, /var/tmp, /dev/shm and /home mounted noexec,
+# as the DISA STIG has them, on every host: same playbooks and inventory as
+# ../default, plus nss for Reporting (inventory/hosts.yml); verify also starts
+# Reporting's headless Chromium with its profile under /tmp. MOLECULE_EL picks
+# the AlmaLinux release, as in the default scenario.
+#   molecule test -s noexec
+role_name_check: 1
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_SCENARIO_DIRECTORY}/../default/requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: kibana-noexec-es
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
+    pre_build_image: true
+    override_command: false   # keep the image's own CMD: systemd as PID 1
+    systemd: always
+    # Passed to podman run as they are: Molecule's and the podman driver's
+    # schemas disagree on the type of `tmpfs`, so neither form validates.
+    # /dev/shm is already noexec under Podman.
+    extra_opts: &noexec
+      - --tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777
+      - --tmpfs=/var/tmp:rw,nosuid,nodev,noexec,mode=1777
+      - --tmpfs=/home:rw,nosuid,nodev,noexec
+    network: kibana_noexec
+    groups: [elasticsearch]
+
+  - name: kibana-noexec-kb1
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    extra_opts: *noexec
+    network: kibana_noexec
+    groups: [kibana]
+
+  - name: kibana-noexec-kb2
+    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
+    pre_build_image: true
+    override_command: false
+    systemd: always
+    extra_opts: *noexec
+    network: kibana_noexec
+    groups: [kibana]
+
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: prepare.yml
+    converge: ../default/converge.yml
+    side_effect: ../default/side_effect.yml
+    verify: verify.yml
+  inventory:
+    links:
+      hosts: inventory/hosts.yml   # nss on the Kibana hosts
+      group_vars: ../default/inventory/group_vars/
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - check
+    - side_effect
+    - verify
+    - destroy

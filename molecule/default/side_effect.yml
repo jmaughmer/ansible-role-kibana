@@ -24,7 +24,6 @@
 
 - name: Change a kibana.yml setting
   hosts: kibana
-  become: true
   gather_facts: false
   tasks:
     - name: Apply the role
@@ -53,7 +52,6 @@
 
 - name: Change an encryption key without restarting
   hosts: kibana
-  become: true
   gather_facts: false
   tasks:
     - name: Read the keystore state
@@ -92,7 +90,6 @@
 
 - name: Go back to the converge settings with a forced restart
   hosts: kibana
-  become: true
   gather_facts: false
   tasks:
     - name: Apply the role
