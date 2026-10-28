@@ -1,0 +1,4 @@
+---
+# Reporting's headless Chromium needs nss, which the cloud image lacks.
+# verify.yml starts it the way Reporting does, with its profile under /tmp.
+kibana_extra_packages: [nss]
