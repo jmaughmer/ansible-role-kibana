@@ -501,8 +501,8 @@ ansible-role-elastic-tls leaves them. The sequence is:
 
 Tests run on the lab's molecule control machine: `molecule`, `molecule-proxmox` and the role's
 collections are preinstalled there, and the driver's connection secrets and SSH key live only in
-its own config files. Nothing lab-specific is in this repo beyond the fleet template names and
-the pinned VMIDs (9270–9272); hosts, tokens and subnets never leave the control machine. The
+its own config files. Nothing lab-specific is in this repo beyond the fleet template names and the
+default VMID band (9270–9272); hosts, tokens and subnets never leave the control machine. The
 Test Lab project's `molecule-labnet/` directory documents the lab itself.
 
 ```bash
@@ -513,8 +513,16 @@ LAB_TEMPLATE=template-ubuntu-2404 molecule test # the Debian-family path
 ```
 
 `LAB_TEMPLATE` picks the fleet template every VM is cloned from (default `template-alma9`). The
-VMIDs are pinned, so one lab run of this repo at a time; other roles' runs share the lab side by
-side.
+VMIDs come from `LAB_VMID_0/1/2` and default to the pinned 9270–9272 band, so a plain
+`molecule test` means one lab run of this repo at a time. For several runs of this repo at once,
+use the lab's `mlab` wrapper, which claims a free VMID band (and an isolated ephemeral directory)
+per run:
+
+```bash
+/root/labnet/mlab test -s default               # parallel-safe run on the control machine
+```
+
+Other roles' runs share the lab side by side in any case.
 
 Lint with `yamllint .` and `ansible-lint` (configured by [`.yamllint`](.yamllint) and
 [`.ansible-lint`](.ansible-lint)). There is no GitHub Actions workflow; run the lint and Molecule

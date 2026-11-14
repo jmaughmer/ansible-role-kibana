@@ -7,11 +7,14 @@
 # inventory/group_vars/all.yml sets ansible_become so the plays run as root.
 #
 # All Proxmox connection details live in the driver's secrets file on the
-# control machine, not here. VMIDs are pinned 9270-9272, so only one lab run
-# of this repo at a time; different repos can run side by side.
+# control machine, not here. Default VMIDs are the repo's 9270-9272 band, via
+# LAB_VMID_0/1/2 so the lab's `mlab` runner can claim a free band per run and
+# allow parallel runs of this repo; a plain molecule test uses the pinned band,
+# one lab run of this repo at a time.
 #
 # Run on the lab's molecule control machine:
-#   molecule test                                  # full sequence
+#   /root/labnet/mlab test -s default              # parallel-safe, recommended
+#   molecule test                                  # pinned band
 #   LAB_TEMPLATE=template-alma10 molecule test     # the other EL release
 #   LAB_TEMPLATE=template-alma8 molecule test
 #   LAB_TEMPLATE=template-ubuntu-2404 molecule test
@@ -40,21 +43,21 @@ driver:
 platforms:
   - name: kibana-default-es
     template_name: ${LAB_TEMPLATE:-template-alma9}
-    newid: 9270
+    newid: ${LAB_VMID_0:-9270}
     groups: [elasticsearch]
     memory: 6144          # Elasticsearch heap plus page cache (driver patch)
     cores: 2
 
   - name: kibana-default-kb1
     template_name: ${LAB_TEMPLATE:-template-alma9}
-    newid: 9271
+    newid: ${LAB_VMID_1:-9271}
     groups: [kibana]
     memory: 3072
     cores: 2
 
   - name: kibana-default-kb2
     template_name: ${LAB_TEMPLATE:-template-alma9}
-    newid: 9272
+    newid: ${LAB_VMID_2:-9272}
     groups: [kibana]
     memory: 3072
     cores: 2
