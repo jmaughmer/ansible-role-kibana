@@ -64,6 +64,9 @@ platforms:
 
 provisioner:
   name: ansible
+  inventory:
+    links:
+      group_vars: inventory/group_vars/   # ansible_become + test_* and kibana_* vars
   env:
     ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/..:/root/.ansible/roles"
 
