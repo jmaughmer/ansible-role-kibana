@@ -1,6 +1,5 @@
 ---
-# Role settings shared by every scenario that installs Kibana. The basic
-# scenario overrides the authentication and TLS settings in its host_vars.
+# Role settings for the Kibana instances of the lab scenario.
 
 kibana_elasticsearch_hosts: ["https://{{ test_es_address }}:9200"]
 
@@ -28,6 +27,6 @@ kibana_max_old_space_size_mb: 1024
 
 # Show what was rendered if a run fails.
 kibana_no_log: false
-# Retry less: a failure in a container is not a flaky satellite link.
+# Retry less: a failure on a lab VM is not a flaky satellite link.
 kibana_task_retries: 2
 kibana_task_delay: 5

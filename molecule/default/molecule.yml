@@ -1,67 +1,74 @@
 ---
-# Three systemd containers (rootless Podman is fine) on one network:
-#   kibana-default-es   Elasticsearch, single node, installed by prepare.yml
-#   kibana-default-kb1  the inventory group "kibana", which the role is
-#   kibana-default-kb2  applied to
-# The playbooks and inventory find the hosts by group, and every scenario
-# names its hosts and network after itself, so scenarios can run at the same
-# time.
-# MOLECULE_EL picks the AlmaLinux release of the almalinux/<release>-init
-# image (default 9; also 10) — see the README's "Testing" section. The
-# playbooks and inventory here are shared with the other scenarios. Ansible
-# connects as root, so the playbooks do not use become: the images have no
-# sudo.
+# Tests run on the Proxmox test lab: three real KVM VMs cloned from the lab
+# fleet onto the isolated labnet network — SELinux enforcing and firewalld
+# running, the paths containers could never exercise. One Elasticsearch node
+# plus two Kibana instances; the groups (elasticsearch, kibana) are what the
+# playbooks and inventory address. The driver connects as a sudo user, and
+# inventory/group_vars/all.yml sets ansible_become so the plays run as root.
 #
-# Inside containers SELinux is off and firewalld isn't installed, so this
-# exercises the role's skip paths for both.
+# All Proxmox connection details live in the driver's secrets file on the
+# control machine, not here. VMIDs are pinned 9270-9272, so only one lab run
+# of this repo at a time; different repos can run side by side.
+#
+# Run on the lab's molecule control machine:
+#   molecule test                                  # full sequence
+#   LAB_TEMPLATE=template-alma10 molecule test     # the other EL release
+#   LAB_TEMPLATE=template-alma8 molecule test
+#   LAB_TEMPLATE=template-ubuntu-2404 molecule test
 #
 # The sequence adds `check` (converge in check mode on the converged hosts)
 # after the idempotence check, and side_effect.yml (restarts) before verify.
 role_name_check: 1
 
 dependency:
-  name: galaxy   # installs requirements.yml next to this file
+  name: galaxy
+  enabled: false        # collections preinstalled on the control machine
+prerun: false
 
 driver:
-  name: podman
+  name: molecule-proxmox
+  options:
+    proxmox_secrets: ${LAB_PROXMOX_SECRETS:-/root/.config/molecule/proxmox-secrets.yml}
+    node: ${LAB_NODE:-galactica}
+    validate_certs: false   # the lab's PVE uses its self-signed cert
+    ssh_user: labadmin
+    ssh_identity_file: /root/.ssh/id_ed25519
+    full: true
+    pool: testlab
+    timeout: 300
 
 platforms:
   - name: kibana-default-es
-    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
-    pre_build_image: true
-    override_command: false   # keep the image's own CMD: systemd as PID 1
-    systemd: always
-    network: kibana_default  # created by the driver from the first platform
+    template_name: ${LAB_TEMPLATE:-template-alma9}
+    newid: 9270
     groups: [elasticsearch]
+    memory: 6144          # Elasticsearch heap plus page cache (driver patch)
+    cores: 2
 
   - name: kibana-default-kb1
-    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
-    pre_build_image: true
-    override_command: false
-    systemd: always
-    network: kibana_default
+    template_name: ${LAB_TEMPLATE:-template-alma9}
+    newid: 9271
     groups: [kibana]
+    memory: 3072
+    cores: 2
 
   - name: kibana-default-kb2
-    image: "docker.io/almalinux/${MOLECULE_EL:-9}-init:latest"
-    pre_build_image: true
-    override_command: false
-    systemd: always
-    network: kibana_default
+    template_name: ${LAB_TEMPLATE:-template-alma9}
+    newid: 9272
     groups: [kibana]
+    memory: 3072
+    cores: 2
 
 provisioner:
   name: ansible
-  inventory:
-    links:
-      group_vars: inventory/group_vars/
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/..:/root/.ansible/roles"
 
 verifier:
   name: ansible
 
 scenario:
   test_sequence:
-    - dependency
     - destroy
     - syntax
     - create

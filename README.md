@@ -457,8 +457,7 @@ correctly where the package puts them; moved elsewhere they come out as `default
 
 The STIG mounts `/tmp`, `/var/tmp` and `/dev/shm` with `noexec`. Kibana needs nothing for that:
 Node.js loads its native modules from Kibana's home, and Reporting's headless Chromium runs from there
-too, keeping only its profile and shared memory in `/tmp` and `/dev/shm`. The `noexec` scenario
-tests both (see [Testing](#testing)).
+too, keeping only its profile and shared memory in `/tmp` and `/dev/shm`.
 
 ## Notes and caveats
 
@@ -471,11 +470,15 @@ tests both (see [Testing](#testing)).
 
 ## Testing
 
-[`molecule/default/`](molecule/default/) runs the role against three systemd containers on one
-container network: `kibana-default-es`, a single Elasticsearch node at the role's default
-`kibana_version`, and two Kibana instances, `kibana-default-kb1` and `kibana-default-kb2`. [`prepare.yml`](molecule/default/prepare.yml) makes a test CA
-and a certificate for every host, starts Elasticsearch with TLS on HTTP, and creates a service
-account token for `elastic/kibana`. The Kibana certificates are left on the hosts as files, as
+[`molecule/default/`](molecule/default/) runs the role against three real KVM VMs cloned from the
+Proxmox test lab's fleet onto its isolated labnet network: `kibana-default-es`, a single
+Elasticsearch node at the role's default `kibana_version`, and two Kibana instances,
+`kibana-default-kb1` and `kibana-default-kb2`. They are full VMs — SELinux enforcing, firewalld
+running — the paths containers never could.
+[`prepare.yml`](molecule/default/prepare.yml) gets the VMs onto the labnet resolver, makes a test CA
+and a certificate for every host (name, loopback and labnet address in the SANs), starts
+Elasticsearch with TLS on HTTP, and creates a service account token for `elastic/kibana`. The
+Kibana certificates are left on the hosts as files, as
 ansible-role-elastic-tls leaves them. The sequence is:
 
 1. **converge**, then **idempotence**: a second converge must change nothing;
@@ -496,74 +499,33 @@ ansible-role-elastic-tls leaves them. The sequence is:
    - a session cookie issued by one instance is accepted by the other, so the encryption keys
      match.
 
-Other scenarios:
-
-| Scenario | What it covers |
-|---|---|
-| `basic` | Basic authentication as `kibana_system`, whose password the role sets with admin credentials, and TLS material given inline with an encrypted key and its passphrase. |
-| `upgrade` | Two instances at an older 9.x release are upgraded to the default version. An upgrade run that leaves an instance out is refused first. Every instance stops before the first starts again, and that one starts alone. Going back to the older release is refused. |
-| `preflight` | Settings preflight must refuse, each in its own check, without printing a secret. These include an unsupported distribution, a host outside `kibana_group`, an inexact or 8.x version, a bad package source, unknown node roles, missing or forbidden credentials, short or differing encryption keys, a malformed firewall port, and missing TLS material. Nothing is installed. |
-| `ubuntu` | The default scenario on Ubuntu containers, from the official `ubuntu` image with systemd and Python added ([`Dockerfile.j2`](molecule/ubuntu/Dockerfile.j2)). |
-| `noexec` | The default scenario with `/tmp`, `/var/tmp`, `/dev/shm` and `/home` mounted `noexec`, as the STIG has them. Verify also renders a page with Reporting's headless Chromium the way Reporting runs it. |
+Tests run on the lab's molecule control machine: `molecule`, `molecule-proxmox` and the role's
+collections are preinstalled there, and the driver's connection secrets and SSH key live only in
+its own config files. Nothing lab-specific is in this repo beyond the fleet template names and
+the pinned VMIDs (9270–9272); hosts, tokens and subnets never leave the control machine. The
+Test Lab project's `molecule-labnet/` directory documents the lab itself.
 
 ```bash
-pip install -r molecule/requirements.txt
+molecule test                                   # AlmaLinux 9, SELinux enforcing
+LAB_TEMPLATE=template-alma10 molecule test      # the other EL release
+LAB_TEMPLATE=template-alma8 molecule test
+LAB_TEMPLATE=template-ubuntu-2404 molecule test # the Debian-family path
 ```
 
-```bash
-for s in default basic upgrade preflight ubuntu noexec; do molecule test -s "$s" || break; done
-```
-
-The scenarios use Podman (rootless works). Any Linux host with systemd and Podman will do, such as
-an AlmaLinux 10 WSL 2 distribution with `systemd=true` in `/etc/wsl.conf`; no KVM is needed. They
-download Elasticsearch and Kibana from Elastic's repository, and Elasticsearch and two Kibana
-instances need about 4 GB of memory. `MOLECULE_EL` picks the `docker.io/almalinux/<release>-init`
-image (default `9`; also `10`):
-
-```bash
-MOLECULE_EL=10 molecule test -s preflight
-```
-
-`MOLECULE_UBUNTU` picks the release for the `ubuntu` scenario (default `24.04`; also `26.04`).
-
-Each scenario names its containers and network after itself (`kibana-<scenario>-<host>`, on
-`kibana_<scenario>`), so different scenarios, in this role or the others, can run at the same
-time, memory permitting:
-
-```bash
-for s in default basic upgrade preflight ubuntu noexec; do molecule test -s "$s" & done; wait
-```
-
-One scenario runs once at a time: Molecule keeps a single state per scenario, so run
-`MOLECULE_EL=9` and `MOLECULE_EL=10` of one scenario one after the other.
+`LAB_TEMPLATE` picks the fleet template every VM is cloned from (default `template-alma9`). The
+VMIDs are pinned, so one lab run of this repo at a time; other roles' runs share the lab side by
+side.
 
 Lint with `yamllint .` and `ansible-lint` (configured by [`.yamllint`](.yamllint) and
 [`.ansible-lint`](.ansible-lint)). There is no GitHub Actions workflow; run the lint and Molecule
-scenarios locally.
+from the control machine.
 
-Not covered by containers: SELinux enforcing (the containers share the host's kernel, and WSL's
-does not enforce SELinux), SELinux contexts for relocated directories, firewalld rules, FIPS mode,
-fapolicyd, and Satellite repositories. These need virtual machines with SELinux enforcing,
-firewalld running, FIPS enabled, fapolicyd enforcing, or a Satellite registration.
-
-### fapolicyd, on KVM virtual machines
-
-[`molecule/kvm-fapolicyd/`](molecule/kvm-fapolicyd/) runs the upgrade scenario on AlmaLinux 10 VMs,
-with fapolicyd enforcing on the Kibana hosts, `allow_filesystem_mark = 1`, and nothing added to its
-rules. It checks that both instances install, upgrade and run with nothing denied, and that the trust
-entries cover the modules and the reporting browser. It cannot run in containers: fapolicyd needs a
-privileged, rootful container there, and its filesystem marks would then cover the container host's
-own filesystems, so a denial could stop programs starting on the host.
-
-```bash
-molecule test -s kvm-fapolicyd
-```
-
-The machine running Molecule needs KVM, libvirt, `virt-install`, `qemu-img` and `xorriso`, and its
-user must be able to manage `qemu:///system`. The cloud image downloads once, checksum verified, to
-`/var/lib/libvirt/images/molecule`; each VM gets a throwaway disk on top of it. The scenario's
-inventory links to the default scenario's files, so run it from a checkout with symbolic links
-(not a Windows one with `core.symlinks=false`).
+Not covered by the scenario: the preflight refusals, basic authentication with inline TLS
+material (the scenario uses a service account token and certificates left on the host), the
+coordinated multi-instance upgrade flow, SELinux contexts for relocated directories, FIPS mode,
+fapolicyd, and Satellite repositories. These need either dedicated scenario work or specially
+configured guests (fapolicyd enforcing, FIPS enabled, a Satellite registration) beyond the stock
+fleet templates.
 
 ## Role layout
 
@@ -590,7 +552,7 @@ inventory links to the default scenario's files, so run it from a checkout with 
 │   └── upgrade.yml              # coordinated all-instance upgrade
 ├── templates/
 ├── examples/
-└── molecule/                   # default, basic, upgrade, preflight, ubuntu, noexec (Podman), kvm-fapolicyd (VMs)
+└── molecule/                   # default — the Proxmox test-lab scenario (molecule-proxmox)
 ```
 
 ## Related roles

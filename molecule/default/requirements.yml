@@ -1,5 +1,0 @@
----
-collections:
-  - name: ansible.posix       # the role's firewalld tasks
-  - name: community.general   # the role's ufw tasks
-  - name: containers.podman   # Molecule's podman driver
